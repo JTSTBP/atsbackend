@@ -28,14 +28,8 @@ app.use(express.json());
 app.use("/uploads", express.static("uploads"));
 
 
-// ===== MongoDB Connection =====
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB Connected"))
-  .catch((err) => console.error(err));
 
-// // Routes
-
+// ===== Routes =====
 app.use("/api/users", userRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/leaves", leaveRoutes);
@@ -56,8 +50,34 @@ app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
 
-// Start server
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, "0.0.0.0", () =>
-  console.log(`Server running on port ${PORT}`)
-);
+// ===== MongoDB Connection & Server Start =====
+mongoose.set('strictQuery', false);
+
+const connectDB = async () => {
+  try {
+    console.log("⏳ Connecting to MongoDB...");
+    const conn = await mongoose.connect(process.env.MONGO_URI, {
+      serverSelectionTimeoutMS: 20000,
+    });
+    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+    
+    const PORT = process.env.PORT || 5000;
+    app.listen(PORT, "0.0.0.0", () =>
+      console.log(`🚀 Server running on port ${PORT}`)
+    );
+  } catch (error) {
+    console.error("❌ MongoDB Connection Error:", error.message);
+    // Log more details if it's a timeout
+    if (error.message.includes('buffering timed out')) {
+      console.error("TIP: Check your IP whitelisting in MongoDB Atlas and your internet connection.");
+    }
+    process.exit(1);
+  }
+};
+
+connectDB();
+
+const db = mongoose.connection;
+db.on('error', (err) => console.error('❌ Mongoose connection error:', err));
+db.on('disconnected', () => console.log('⚠️ Mongoose disconnected'));
+db.on('reconnected', () => console.log('✅ Mongoose reconnected'));
