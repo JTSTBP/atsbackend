@@ -50,9 +50,14 @@ app.use("/api/attendance", attendanceRoutes);
 
 
 
-// Default route
-app.get("/", (req, res) => {
-  res.send("Jobs Territory ATS API is running");
+
+
+// Serve frontend dist
+app.use(express.static(path.join(__dirname, "dist")));
+
+// React/Vite fallback route
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
 
 // Start server
