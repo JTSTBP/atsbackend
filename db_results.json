@@ -1,0 +1,115 @@
+{
+  "env": {
+    "CLOUD_NAME": "df7lukf8a",
+    "API_KEY": "Present"
+  },
+  "clients": [
+    {
+      "id": "697dc6e01ed438cb21ac635d",
+      "name": "dummy",
+      "logo": "uploads/clients/ats/clients/1769850588495-hero section 4"
+    },
+    {
+      "id": "697b9bb5e81e3bae616f993d",
+      "name": "Nestavera",
+      "logo": "uploads/clients/1769708468874-43272.png"
+    },
+    {
+      "id": "697b777ae81e3bae616f506f",
+      "name": "Escon Elevators ",
+      "logo": "uploads/clients/1769699194564-43236.png"
+    },
+    {
+      "id": "6978f47b3b98ab31d8d3b65b",
+      "name": "DEHI",
+      "logo": "uploads/clients/1769534586968-42810.png"
+    },
+    {
+      "id": "697781036ea87ef77a63b72a",
+      "name": "TOT Learning ",
+      "logo": "uploads/clients/1769439491383-42547.png"
+    },
+    {
+      "id": "6973d4186ea87ef77a604318",
+      "name": "Chupps Footwear",
+      "logo": "uploads/clients/1769198616186-41900.png"
+    },
+    {
+      "id": "697259d776ba9eb912c57ba6",
+      "name": "Arihant Play",
+      "logo": "uploads/clients/1769101782902-41550.jpg"
+    },
+    {
+      "id": "697106dbca8a7c3d381e843e",
+      "name": "Mainstreet Marketplace ",
+      "logo": "uploads/clients/1769015003612-41250.jpg"
+    },
+    {
+      "id": "696f1be8d0c291647011ffbe",
+      "name": "Navata",
+      "logo": "uploads/clients/1768889320275-40860.jpg"
+    },
+    {
+      "id": "696dbb754eb6d12b8f0be9c0",
+      "name": "Evam Finance Pvt. Ltd.",
+      "logo": "uploads/clients/1768799092928-40489.png"
+    },
+    {
+      "id": "696806f61dbf325db900efd5",
+      "name": "Incut Digital",
+      "logo": "uploads/clients/1768425206116-39514.jpg"
+    },
+    {
+      "id": "69676ec51dbf325db9fffaec",
+      "name": "XYXX APPARELS ",
+      "logo": "uploads/clients/1768386244853-39183.jpg"
+    },
+    {
+      "id": "696536061dbf325db9fcf986",
+      "name": "UFC GYM",
+      "logo": "uploads/clients/1768240645513-38585.png"
+    },
+    {
+      "id": "6961549c26bf380cfa524b75",
+      "name": "Brick2Wall",
+      "logo": "uploads/clients/1767986331806-37813.png"
+    },
+    {
+      "id": "696153cb26bf380cfa524b4a",
+      "name": "Rapid Claims",
+      "logo": "uploads/clients/1767986123434-37810.png"
+    },
+    {
+      "id": "695eabb5d89a52be837aa2f0",
+      "name": "Cautio",
+      "logo": "uploads/clients/1767812021199-37121.jpg"
+    },
+    {
+      "id": "695dfe3ed89a52be837a402b",
+      "name": "Nambiar Builders ",
+      "logo": "uploads/clients/1767767655518-36935.jpg"
+    },
+    {
+      "id": "6957dbd04aaada022c918418",
+      "name": "GEMINI POWER HYDRAULICS POWER LTD.",
+      "logo": "uploads/clients/1767365583857-35962.png"
+    },
+    {
+      "id": "6957d7524aaada022c91816b",
+      "name": "SNN RAJ CORP",
+      "logo": "uploads/clients/1767364434053-35960.jpg"
+    },
+    {
+      "id": "69541a6f4aaada022c91244d",
+      "name": "Spectacom ",
+      "logo": "uploads/clients/1767119470965-35068.png"
+    }
+  ],
+  "users": [
+    {
+      "id": "694a79732eb5074a96fbe516",
+      "name": "Shamiya Xec",
+      "photo": "uploads/profiles/1766489500552-393235181.jpg"
+    }
+  ]
+}

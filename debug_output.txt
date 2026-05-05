@@ -1,0 +1,15 @@
+Connected to DB
+Current Time: 2026-02-03T06:54:20.494Z
+Monthly Filter Start Date: 2026-01-03T06:54:20.494Z
+
+--- A. ALL PAYMENTS ---
+Total Count: 1
+ID: 69819a9200be34f8d7f2f24f, Amt: 3200 (number), Date: Tue Feb 03 2026 05:30:00 GMT+0530 (India Standard Time) (object), Invoice: 69819a8700be34f8d7f2f239
+
+--- B. MONTHLY FILTERED PAYMENTS ---
+Filtered Count: 1
+Calculated Total Income: 3200
+
+--- C. ALL EXPENSES ---
+Total Count: 1
+ID: 69819aa500be34f8d7f2f263, Amt: 200, Date: Tue Feb 03 2026 05:30:00 GMT+0530 (India Standard Time)

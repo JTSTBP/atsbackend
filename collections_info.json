@@ -1,0 +1,51 @@
+{
+  "collections": [
+    "candidatesbyjobs",
+    "sessions",
+    "attendances",
+    "candidatebyjobs",
+    "leaveapplications",
+    "payments",
+    "invoices",
+    "clients",
+    "users",
+    "expenses",
+    "activitylogs",
+    "jobs"
+  ],
+  "samples": {
+    "candidatesbyjobs": [],
+    "candidatebyjobs": [
+      {
+        "id": "6936636a176fa1daaf2db4f5"
+      },
+      {
+        "id": "6936645a176fa1daaf2db649"
+      },
+      {
+        "id": "693664fe176fa1daaf2db77f"
+      },
+      {
+        "id": "69366918176fa1daaf2dc0d4"
+      },
+      {
+        "id": "69366b13176fa1daaf2dc225"
+      },
+      {
+        "id": "69368052176fa1daaf2dcb95"
+      },
+      {
+        "id": "6936a04b176fa1daaf2dfdeb"
+      },
+      {
+        "id": "6936bb94176fa1daaf2e055b"
+      },
+      {
+        "id": "6936bcb6176fa1daaf2e0597"
+      },
+      {
+        "id": "6936d4e6176fa1daaf2e0b21"
+      }
+    ]
+  }
+}

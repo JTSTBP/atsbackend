@@ -1,0 +1,40 @@
+{
+  "_id": "697de0d996054f7d4c5ae6fa",
+  "jobId": "69676fc51dbf325db9fffafd",
+  "createdBy": "696db34c4eb6d12b8f0ba950",
+  "resumeUrl": "/uploads/resumes/1769857240918-AnuragPal.pdf",
+  "linkedinUrl": "",
+  "portfolioUrl": "",
+  "notes": "Good to go.",
+  "status": "Shortlisted",
+  "rejectedBy": null,
+  "rejectionReason": null,
+  "droppedBy": null,
+  "dynamicFields": {
+    "candidateName": "Anurag Pal",
+    "Email": "palanurag607@gmail.com",
+    "Phone": "9867116266",
+    "currentCompany": "GP life innovation ",
+    "Skills": "",
+    "Experience": "2",
+    "currentCTC": "14000",
+    "expectedCTC": "16000",
+    "noticePeriod": "Immediate"
+  },
+  "interviewStage": null,
+  "interviewStageHistory": [],
+  "statusHistory": [
+    {
+      "status": "Shortlisted",
+      "comment": "Good to go.",
+      "updatedBy": "69292f5ce57c665af1f9dcbf",
+      "timestamp": "2026-01-31T11:25:33.776Z",
+      "_id": "697de6ad96054f7d4c5b7ba7"
+    }
+  ],
+  "comments": [],
+  "createdAt": "2026-01-31T11:00:41.228Z",
+  "updatedAt": "2026-01-31T11:25:33.776Z",
+  "__v": 0,
+  "UpdatedStatusBy": "69292f5ce57c665af1f9dcbf"
+}
