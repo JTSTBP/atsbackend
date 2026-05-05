@@ -1,11 +1,10 @@
+const dotenv = require("dotenv");
+const path = require("path");
+dotenv.config({ path: path.join(__dirname, ".env") });
+
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const dotenv = require("dotenv");
-
-// Load environment variables immediately
-const path = require("path");
-dotenv.config({ path: path.join(__dirname, ".env") });
 const userRoutes = require("./routes/Userroutes");
 const authRoutes = require("./routes/Authroutes");
 const leaveRoutes = require("./routes/Leavesroutes");
