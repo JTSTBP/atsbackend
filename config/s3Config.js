@@ -53,8 +53,10 @@ if (hasCredentials) {
         try {
             const endpointUrl = new URL(process.env.R2_ENDPOINT);
             s3Config.endpoint = `${endpointUrl.protocol}//${endpointUrl.hostname}`;
+            s3Config.s3ForcePathStyle = true; // Required for R2 custom endpoints
         } catch (e) {
             s3Config.endpoint = process.env.R2_ENDPOINT;
+            s3Config.s3ForcePathStyle = true;
         }
     } else {
         s3Config.region = process.env.AWS_REGION;
@@ -181,30 +183,36 @@ const deleteFile = async (fileUrl) => {
     if (isCloudUrl && s3) {
         try {
             const urlObj = new URL(fileUrl);
-            let key = decodeURIComponent(urlObj.pathname.substring(1));
+            const hostname = urlObj.hostname;
+            let pathname = decodeURIComponent(urlObj.pathname);
+            if (pathname.startsWith('/')) pathname = pathname.substring(1);
 
-            // Handle Path-Style URLs for S3
             const s3BucketName = process.env.AWS_S3_BUCKET_NAME;
-            if (urlObj.hostname.startsWith('s3.') && s3BucketName && key.startsWith(s3BucketName + '/')) {
-                key = key.substring(s3BucketName.length + 1);
-            }
-
-            // Handle R2 custom domains/public URLs
             const r2BucketName = process.env.R2_BUCKET_NAME;
-            if (process.env.R2_PUBLIC_URL && fileUrl.includes(process.env.R2_PUBLIC_URL)) {
-                const publicUrlObj = new URL(process.env.R2_PUBLIC_URL);
-                if (key.startsWith(publicUrlObj.pathname.substring(1))) {
-                    // key is already correct or needs slight adjustment if public URL has a path
+            let bucket = hasR2Credentials ? r2BucketName : s3BucketName;
+            let key = pathname;
+
+            // 1. Handle Virtual-Hosted Style (bucket.s3.amazonaws.com)
+            const vhostMatch = hostname.match(/^(.+)\.s3[.-][^.]+\.amazonaws\.com$/);
+            if (vhostMatch) {
+                bucket = vhostMatch[1];
+                key = pathname;
+            } 
+            // 2. Handle Path-Style (s3.amazonaws.com/bucket/key or R2 account-id.r2.cloudflarestorage.com/bucket/key)
+            else if (hostname.includes('s3.amazonaws.com') || hostname.includes('r2.cloudflarestorage.com') || hostname.endsWith('.r2.dev')) {
+                const parts = pathname.split('/');
+                if (parts.length > 1) {
+                    bucket = parts[0];
+                    key = parts.slice(1).join('/');
                 }
             }
 
-            if (key) {
-                const bucket = hasR2Credentials ? process.env.R2_BUCKET_NAME : process.env.AWS_S3_BUCKET_NAME;
+            if (key && bucket) {
                 await s3.deleteObject({
                     Bucket: bucket,
                     Key: key
                 }).promise();
-                console.log(`🗑️ Deleted from cloud storage: ${key}`);
+                console.log(`🗑️ Deleted from cloud storage: ${key} (Bucket: ${bucket})`);
             }
         } catch (error) {
             console.error("❌ Error deleting from cloud storage:", error);
@@ -235,15 +243,33 @@ const getSignedUrl = (fileUrl) => {
     if (isCloudUrl) {
         try {
             const urlObj = new URL(fileUrl);
-            let key = decodeURIComponent(urlObj.pathname.substring(1));
+            const hostname = urlObj.hostname;
+            let pathname = decodeURIComponent(urlObj.pathname);
+            if (pathname.startsWith('/')) pathname = pathname.substring(1);
 
             const s3BucketName = process.env.AWS_S3_BUCKET_NAME;
-            if (urlObj.hostname.startsWith('s3.') && s3BucketName && key.startsWith(s3BucketName + '/')) {
-                key = key.substring(s3BucketName.length + 1);
+            const r2BucketName = process.env.R2_BUCKET_NAME;
+            let bucket = hasR2Credentials ? r2BucketName : s3BucketName;
+            let key = pathname;
+
+            // 1. Handle Virtual-Hosted Style (bucket.s3.amazonaws.com)
+            const vhostMatch = hostname.match(/^(.+)\.s3[.-][^.]+\.amazonaws\.com$/);
+            if (vhostMatch) {
+                bucket = vhostMatch[1];
+                key = pathname;
+            } 
+            // 2. Handle Path-Style (s3.amazonaws.com/bucket/key or R2 account-id.r2.cloudflarestorage.com/bucket/key)
+            else if (hostname.includes('s3.amazonaws.com') || hostname.includes('r2.cloudflarestorage.com') || hostname.endsWith('.r2.dev')) {
+                const parts = pathname.split('/');
+                if (parts.length > 1) {
+                    bucket = parts[0];
+                    key = parts.slice(1).join('/');
+                }
             }
 
-            if (key) {
-                const bucket = hasR2Credentials ? process.env.R2_BUCKET_NAME : process.env.AWS_S3_BUCKET_NAME;
+            console.log(`🔗 Generating signed URL for Bucket: ${bucket}, Key: ${key}`);
+
+            if (key && bucket) {
                 const signedUrl = s3.getSignedUrl('getObject', {
                     Bucket: bucket,
                     Key: key,
