@@ -1292,7 +1292,15 @@ router.get("/job/:jobId", async (req, res) => {
         select: "name email designation",
       })
       .sort({ createdAt: -1 });
-    res.json({ success: true, candidates });
+    const candidatesWithSignedUrls = candidates.map(candidate => {
+      const candidateObj = candidate.toObject();
+      return {
+        ...candidateObj,
+        resumeUrl: getSignedUrl(candidateObj.resumeUrl),
+        offerLetter: getSignedUrl(candidateObj.offerLetter)
+      };
+    });
+    res.json({ success: true, candidates: candidatesWithSignedUrls });
   } catch (error) {
     console.error("Error fetching candidates by job:", error);
     res
@@ -1461,7 +1469,14 @@ router.put("/:id", upload.single("resume"), async (req, res) => {
         .catch(err => console.error('Email notification failed:', err));
     }
 
-    res.json({ success: true, candidate: updatedCandidate });
+    const candidateObj = updatedCandidate.toObject();
+    const candidateWithSignedUrl = {
+      ...candidateObj,
+      resumeUrl: getSignedUrl(candidateObj.resumeUrl),
+      offerLetter: getSignedUrl(candidateObj.offerLetter)
+    };
+
+    res.json({ success: true, candidate: candidateWithSignedUrl });
   } catch (error) {
     console.error("Error updating candidate:", error);
     res.status(500).json({
@@ -1783,7 +1798,14 @@ router.post("/:id/comments", async (req, res) => {
       return res.status(404).json({ success: false, message: "Candidate not found" });
     }
 
-    res.json({ success: true, candidate: updatedCandidate });
+    const candidateObj = updatedCandidate.toObject();
+    const candidateWithSignedUrl = {
+      ...candidateObj,
+      resumeUrl: getSignedUrl(candidateObj.resumeUrl),
+      offerLetter: getSignedUrl(candidateObj.offerLetter)
+    };
+
+    res.json({ success: true, candidate: candidateWithSignedUrl });
   } catch (error) {
     console.error("Error adding comment:", error);
     res.status(500).json({ success: false, message: "Failed to add comment" });
