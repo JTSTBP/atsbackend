@@ -166,6 +166,59 @@ if (hasCredentials) {
     });
 }
 
+/**
+ * Extract the correct bucket and key from a file URL.
+ * When R2 is active, always use the R2 bucket name (never the old S3 bucket name).
+ */
+const extractBucketAndKey = (fileUrl) => {
+    const r2BucketName = process.env.R2_BUCKET_NAME;
+    const s3BucketName = process.env.AWS_S3_BUCKET_NAME;
+
+    const urlObj = new URL(fileUrl);
+    const hostname = urlObj.hostname;
+    let pathname = decodeURIComponent(urlObj.pathname);
+    if (pathname.startsWith('/')) pathname = pathname.substring(1);
+
+    // Default: use the configured active bucket
+    let bucket = hasR2Credentials ? r2BucketName : s3BucketName;
+    let key = pathname;
+
+    // Virtual-Hosted Style: bucket.s3.region.amazonaws.com/key
+    const vhostMatch = hostname.match(/^(.+)\.s3[.-][^.]+\.amazonaws\.com$/);
+    if (vhostMatch) {
+        // If R2 is active, ignore the S3 bucket name in the URL and use R2 bucket
+        if (!hasR2Credentials) {
+            bucket = vhostMatch[1];
+        }
+        key = pathname;
+    }
+    // Path-Style: s3.amazonaws.com/bucket/key  OR  account.r2.cloudflarestorage.com/bucket/key
+    else if (
+        hostname.includes('s3.amazonaws.com') ||
+        hostname.includes('r2.cloudflarestorage.com') ||
+        hostname.endsWith('.r2.dev')
+    ) {
+        const parts = pathname.split('/');
+        if (parts.length > 1) {
+            if (!hasR2Credentials) {
+                // Pure S3 path-style: first segment is bucket name
+                bucket = parts[0];
+                key = parts.slice(1).join('/');
+            } else {
+                // R2 path-style: first segment may or may not be the bucket name
+                if (parts[0] === r2BucketName) {
+                    key = parts.slice(1).join('/');
+                } else {
+                    // Old S3 bucket name in path — ignore it, use the whole path as key
+                    // OR the path already has the correct key without bucket prefix
+                    key = pathname;
+                }
+            }
+        }
+    }
+
+    return { bucket, key };
+};
 
 /**
  * Centralized helper to delete a file from Cloud Storage (R2/S3) or Local
@@ -175,37 +228,14 @@ const deleteFile = async (fileUrl) => {
     if (!fileUrl) return;
 
     // Check if it's a Cloud Storage URL (S3 or R2)
-    const isCloudUrl = fileUrl.includes('amazonaws.com') || 
+    const isCloudUrl = fileUrl.includes('amazonaws.com') ||
                        (process.env.R2_ENDPOINT && fileUrl.includes(new URL(process.env.R2_ENDPOINT).hostname)) ||
                        fileUrl.includes('r2.cloudflarestorage.com') ||
                        (process.env.R2_PUBLIC_URL && fileUrl.includes(process.env.R2_PUBLIC_URL));
 
     if (isCloudUrl && s3) {
         try {
-            const urlObj = new URL(fileUrl);
-            const hostname = urlObj.hostname;
-            let pathname = decodeURIComponent(urlObj.pathname);
-            if (pathname.startsWith('/')) pathname = pathname.substring(1);
-
-            const s3BucketName = process.env.AWS_S3_BUCKET_NAME;
-            const r2BucketName = process.env.R2_BUCKET_NAME;
-            let bucket = hasR2Credentials ? r2BucketName : s3BucketName;
-            let key = pathname;
-
-            // 1. Handle Virtual-Hosted Style (bucket.s3.amazonaws.com)
-            const vhostMatch = hostname.match(/^(.+)\.s3[.-][^.]+\.amazonaws\.com$/);
-            if (vhostMatch) {
-                bucket = vhostMatch[1];
-                key = pathname;
-            } 
-            // 2. Handle Path-Style (s3.amazonaws.com/bucket/key or R2 account-id.r2.cloudflarestorage.com/bucket/key)
-            else if (hostname.includes('s3.amazonaws.com') || hostname.includes('r2.cloudflarestorage.com') || hostname.endsWith('.r2.dev')) {
-                const parts = pathname.split('/');
-                if (parts.length > 1) {
-                    bucket = parts[0];
-                    key = parts.slice(1).join('/');
-                }
-            }
+            const { bucket, key } = extractBucketAndKey(fileUrl);
 
             if (key && bucket) {
                 await s3.deleteObject({
@@ -231,55 +261,56 @@ const deleteFile = async (fileUrl) => {
     }
 };
 
-// Helper to generate Signed URL
+/**
+ * Generate a pre-signed URL for accessing a file.
+ * Handles:
+ *  1. Old AWS S3 URLs  → re-signed against active Cloudflare R2 bucket
+ *  2. R2 URLs          → re-signed normally
+ *  3. Local-style paths that were migrated to cloud → signed against active bucket
+ */
 const getSignedUrl = (fileUrl) => {
     if (!fileUrl || !s3) return fileUrl;
 
-    const isCloudUrl = fileUrl.includes('amazonaws.com') || 
+    const isCloudUrl = fileUrl.includes('amazonaws.com') ||
                        (process.env.R2_ENDPOINT && fileUrl.includes(new URL(process.env.R2_ENDPOINT).hostname)) ||
                        fileUrl.includes('r2.cloudflarestorage.com') ||
                        (process.env.R2_PUBLIC_URL && fileUrl.includes(process.env.R2_PUBLIC_URL));
 
     if (isCloudUrl) {
         try {
-            const urlObj = new URL(fileUrl);
-            const hostname = urlObj.hostname;
-            let pathname = decodeURIComponent(urlObj.pathname);
-            if (pathname.startsWith('/')) pathname = pathname.substring(1);
-
-            const s3BucketName = process.env.AWS_S3_BUCKET_NAME;
-            const r2BucketName = process.env.R2_BUCKET_NAME;
-            let bucket = hasR2Credentials ? r2BucketName : s3BucketName;
-            let key = pathname;
-
-            // 1. Handle Virtual-Hosted Style (bucket.s3.amazonaws.com)
-            const vhostMatch = hostname.match(/^(.+)\.s3[.-][^.]+\.amazonaws\.com$/);
-            if (vhostMatch) {
-                bucket = vhostMatch[1];
-                key = pathname;
-            } 
-            // 2. Handle Path-Style (s3.amazonaws.com/bucket/key or R2 account-id.r2.cloudflarestorage.com/bucket/key)
-            else if (hostname.includes('s3.amazonaws.com') || hostname.includes('r2.cloudflarestorage.com') || hostname.endsWith('.r2.dev')) {
-                const parts = pathname.split('/');
-                if (parts.length > 1) {
-                    bucket = parts[0];
-                    key = parts.slice(1).join('/');
-                }
-            }
-
+            const { bucket, key } = extractBucketAndKey(fileUrl);
             console.log(`🔗 Generating signed URL for Bucket: ${bucket}, Key: ${key}`);
 
             if (key && bucket) {
-                const signedUrl = s3.getSignedUrl('getObject', {
+                return s3.getSignedUrl('getObject', {
                     Bucket: bucket,
                     Key: key,
                     Expires: 60 * 60 // 1 hour
                 });
-                return signedUrl;
             }
         } catch (error) {
             console.error("Error generating signed URL:", error);
             return fileUrl;
+        }
+    }
+
+    // Handle local-looking paths that have been migrated to cloud storage
+    if (!isCloudUrl && hasCredentials && fileUrl && !fileUrl.startsWith('http')) {
+        const knownPrefixes = ['logos/', 'photos/', 'resumes/', 'offers/', 'uploads/'];
+        if (knownPrefixes.some(prefix => fileUrl.startsWith(prefix))) {
+            try {
+                const bucket = hasR2Credentials ? process.env.R2_BUCKET_NAME : process.env.AWS_S3_BUCKET_NAME;
+                if (bucket) {
+                    console.log(`🔗 Signing migrated local path for Bucket: ${bucket}, Key: ${fileUrl}`);
+                    return s3.getSignedUrl('getObject', {
+                        Bucket: bucket,
+                        Key: fileUrl,
+                        Expires: 60 * 60 // 1 hour
+                    });
+                }
+            } catch (error) {
+                console.error("Error signing migrated local path:", error);
+            }
         }
     }
 
@@ -298,4 +329,3 @@ module.exports = {
     getSignedUrl,
     deleteFile
 };
-
