@@ -713,35 +713,10 @@ router.get("/role-based-candidates", async (req, res) => {
     // 2️⃣ Construct Match Query
     const matchStage = {};
 
-    // A. Visibility Filter (Admin sees all, others strictly by creator or assigned job)
+    // A. Visibility Filter (Admin sees all, others strictly by team members)
     if (lowerDesignation !== "admin") {
       if (allowedUserIds && allowedUserIds.length > 0) {
-        const creatorCondition = {
-          createdBy: { $in: allowedUserIds.map(id => new mongoose.Types.ObjectId(id)) }
-        };
-
-        // For Mentors and Managers, also include candidates for jobs they are assigned to
-        if (lowerDesignation === "mentor" || lowerDesignation === "manager") {
-          const userIdStr = userId.toString();
-
-          // Find jobs where the user or their reportees are assigned
-          const assignedJobs = await Job.find({
-            $or: [
-              { assignedMentors: new mongoose.Types.ObjectId(userIdStr) },
-              { assignedRecruiters: { $in: allowedUserIds.map(id => new mongoose.Types.ObjectId(id)) } },
-              { assignedRecruiter: { $in: allowedUserIds.map(id => new mongoose.Types.ObjectId(id)) } }
-            ]
-          }).select('_id');
-
-          const assignedJobIds = assignedJobs.map(j => j._id);
-
-          matchStage.$or = [
-            creatorCondition,
-            { jobId: { $in: assignedJobIds } }
-          ];
-        } else {
-          matchStage.createdBy = creatorCondition.createdBy;
-        }
+        matchStage.createdBy = { $in: allowedUserIds.map(id => new mongoose.Types.ObjectId(id)) };
       } else if (allowedUserIds && allowedUserIds.length === 0) {
         // Safety: If somehow no users found, restrict to self
         matchStage.createdBy = new mongoose.Types.ObjectId(userId);
@@ -1809,6 +1784,71 @@ router.post("/:id/comments", async (req, res) => {
   } catch (error) {
     console.error("Error adding comment:", error);
     res.status(500).json({ success: false, message: "Failed to add comment" });
+  }
+});
+
+// 🗑️ Delete standalone comment
+router.delete("/:candidateId/comments/:commentId", async (req, res) => {
+  try {
+    const { candidateId, commentId } = req.params;
+
+    const updatedCandidate = await Candidate.findByIdAndUpdate(
+      candidateId,
+      {
+        $pull: {
+          comments: { _id: commentId }
+        }
+      },
+      { new: true }
+    ).populate("comments.author", "name email designation");
+
+    if (!updatedCandidate) {
+      return res.status(404).json({ success: false, message: "Candidate not found" });
+    }
+
+    const candidateObj = updatedCandidate.toObject();
+    const candidateWithSignedUrl = {
+      ...candidateObj,
+      resumeUrl: getSignedUrl(candidateObj.resumeUrl),
+      offerLetter: getSignedUrl(candidateObj.offerLetter)
+    };
+
+    res.json({ success: true, candidate: candidateWithSignedUrl });
+  } catch (error) {
+    console.error("Error deleting comment:", error);
+    res.status(500).json({ success: false, message: "Failed to delete comment" });
+  }
+});
+
+// 🧹 Clear candidate notes (Remarks)
+router.patch("/:id/clear-notes", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    const candidate = await Candidate.findById(id);
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: "Candidate not found" });
+    }
+
+    const oldNotes = candidate.notes;
+    candidate.notes = "";
+    await candidate.save();
+
+    // Activity Log
+    logActivity(
+      role || "Admin",
+      "updated",
+      "candidate-notes",
+      `Cleared candidate remarks (Previous: "${oldNotes || "None"}")`,
+      id,
+      "CandidateByJob"
+    );
+
+    res.json({ success: true, message: "Remarks cleared successfully" });
+  } catch (error) {
+    console.error("Error clearing notes:", error);
+    res.status(500).json({ success: false, message: "Failed to clear remarks" });
   }
 });
 

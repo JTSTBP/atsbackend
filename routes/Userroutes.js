@@ -80,7 +80,7 @@ router.get("/", async (req, res) => {
       const skip = (pageNum - 1) * limitNum;
 
       const users = await User.find(query)
-        .sort({ createdAt: -1 })
+        .sort({ isDisabled: 1, createdAt: -1 })
         .populate("reporter", "name designation")
         .skip(skip)
         .limit(limitNum);
@@ -97,7 +97,7 @@ router.get("/", async (req, res) => {
 
     // Default: Return All Users (Backward Compatibility)
     const users = await User.find(query)
-      .sort({ createdAt: -1 })
+      .sort({ isDisabled: 1, createdAt: -1 })
       .populate("reporter", "name designation");
 
     res.json(users);
