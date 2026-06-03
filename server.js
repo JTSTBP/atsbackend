@@ -9,6 +9,7 @@ const userRoutes = require("./routes/Userroutes");
 const authRoutes = require("./routes/Authroutes");
 const leaveRoutes = require("./routes/Leavesroutes");
 const jobRoutes = require("./routes/Jobroutes");
+const CandidatesJob = require("./routes/CandidatesByJobroutes");
 const sourceCandidateRoutes = require("./routes/SourceCandidateroutes");
 const clientRoutes = require("./routes/Clientroutes");
 const sessionRoutes = require("./routes/Sessionroutes");
