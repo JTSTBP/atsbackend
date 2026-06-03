@@ -50,10 +50,21 @@ const offerLetterStorage = new CloudinaryStorage({
     }
 });
 
+const returnInvoiceProofStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'ats/return-invoices',
+        allowed_formats: ['pdf', 'doc', 'docx', 'jpg', 'png', 'jpeg'],
+        resource_type: 'auto',
+        public_id: (req, file) => `proof-${Date.now()}-${file.originalname.split('.')[0]}`
+    }
+});
+
 module.exports = {
     cloudinary,
     clientLogoStorage,
     profilePhotoStorage,
     resumeStorage,
-    offerLetterStorage
+    offerLetterStorage,
+    returnInvoiceProofStorage
 };

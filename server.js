@@ -9,13 +9,14 @@ const userRoutes = require("./routes/Userroutes");
 const authRoutes = require("./routes/Authroutes");
 const leaveRoutes = require("./routes/Leavesroutes");
 const jobRoutes = require("./routes/Jobroutes");
-const CandidatesJob = require("./routes/CandidatesByJobroutes");
+const sourceCandidateRoutes = require("./routes/SourceCandidateroutes");
 const clientRoutes = require("./routes/Clientroutes");
 const sessionRoutes = require("./routes/Sessionroutes");
 const activityRoutes = require("./routes/Activityroutes");
 const invoiceRoutes = require("./routes/Invoiceroutes");
 const expenseRoutes = require("./routes/Expenseroutes");
 const attendanceRoutes = require("./routes/Attendanceroutes");
+const returnInvoiceRoutes = require("./routes/ReturnInvoiceroutes");
 
 // Initialize Express app
 const app = express();
@@ -39,6 +40,7 @@ app.use("/api/activities", activityRoutes);
 app.use("/api/invoices", invoiceRoutes);
 app.use("/api/expenses", expenseRoutes);
 app.use("/api/attendance", attendanceRoutes);
+app.use("/api/return-invoices", returnInvoiceRoutes);
 
 // Serve frontend dist
 app.use(express.static(path.join(__dirname, "dist")));
