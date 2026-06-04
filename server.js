@@ -35,6 +35,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/leaves", leaveRoutes);
 app.use("/api/jobs", jobRoutes);
 app.use("/api/CandidatesJob", CandidatesJob);
+app.use("/api/source-candidates", sourceCandidateRoutes);
 app.use("/api/clients", clientRoutes);
 app.use("/api/sessions", sessionRoutes);
 app.use("/api/activities", activityRoutes);
