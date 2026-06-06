@@ -91,7 +91,7 @@ router.post("/", upload.single("resume"), async (req, res) => {
 // GET all source candidates
 router.get("/", async (req, res) => {
   try {
-    const candidates = await SourceCandidate.find();
+    const candidates = await SourceCandidate.find().populate("createdBy", "name email designation");
     const candidatesWithSigned = candidates.map((c) => {
       const obj = c.toObject();
       obj.resumeUrl = getSignedUrl(obj.resumeUrl);

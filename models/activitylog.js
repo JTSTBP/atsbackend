@@ -54,7 +54,7 @@ const activityLogSchema = new mongoose.Schema(
     targetModel: {
       type: String,
       required: true,
-      enum: ["CandidateByJob", "Job", "LeaveApplication"], // All allowed models
+      enum: ["CandidateByJob", "Job", "LeaveApplication", "SourceCandidate"], // All allowed models
     },
   },
   {

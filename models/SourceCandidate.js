@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { randomUUID } = require("crypto");
 
 const sourceCandidateSchema = new mongoose.Schema(
   {
@@ -135,6 +136,8 @@ const sourceCandidateSchema = new mongoose.Schema(
       },
     ],
     // Source Candidate Specific Fields
+    candidateId: { type: String, default: randomUUID, unique: true },
+    candidateType: { type: String, default: "sourcecandidate" },
     locationReferred: {
       type: String,
       required: true,
