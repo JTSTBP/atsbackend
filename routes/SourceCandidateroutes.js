@@ -23,6 +23,21 @@ router.post("/", upload.single("resume"), async (req, res) => {
   try {
     const stage = Number(req.body.stage) || 1;
     const { jobId, createdBy } = req.body;
+    // Backwards‑compatible field mapping – accept alternative key names from the frontend
+    let dynamic = {};
+    if (req.body.dynamicFields) {
+      try {
+        dynamic = typeof req.body.dynamicFields === 'string' ? JSON.parse(req.body.dynamicFields) : req.body.dynamicFields;
+      } catch (e) {
+        console.warn('Failed to parse dynamicFields JSON');
+      }
+    }
+    const fullName = req.body.fullName || req.body.candidateName || dynamic.candidateName || '';
+    const email = req.body.email || req.body.Email || dynamic.Email || '';
+    const phone = req.body.phone || req.body.Phone || dynamic.Phone || '';
+    const location = req.body.location || req.body.locationReferred || dynamic.locationReferred || '';
+    // Debug: log incoming payload
+    console.log('Source Candidate payload:', req.body);
 
     // Basic job/recruiter validation (shared for all stages)
     const job = await Job.findById(jobId);
@@ -37,7 +52,7 @@ router.post("/", upload.single("resume"), async (req, res) => {
     // ------------------- Stage handling -------------------
     if (stage === 1) {
       // Personal details stage
-      const { fullName, email, phone, location } = req.body;
+      // Use the mapped variables above for validation
       if (!fullName || !email || !phone || !location) {
         return res.status(400).json({ success: false, message: "Missing required personal details." });
       }
