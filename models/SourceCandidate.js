@@ -159,8 +159,8 @@ const sourceCandidateSchema = new mongoose.Schema(
       required: true,
     },
     // New detailed fields for sourced candidates
-    fullName: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
+    fullName: { type: String, },
+    email: { type: String, unique: true },
     phone: { type: String },
     currentCompany: { type: String },
     currentDesignation: { type: String },
@@ -169,9 +169,14 @@ const sourceCandidateSchema = new mongoose.Schema(
     // Existing richer data fields
     skills: { type: [String], default: [] },
     education: [{
-      degree: String,
       institute: String,
-      year: String,
+      course: String,
+      percentage: String,
+    }],
+    experienceDetails: [{
+      companyName: String,
+      role: String,
+      salary: String,
     }],
     certifications: { type: [String], default: [] },
     projects: [{

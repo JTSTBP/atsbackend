@@ -130,30 +130,28 @@ router.post("/", upload.single("resume"), async (req, res) => {
     }
 
     if (isWizard && stage === 2) {
-      const { education, experience, expectedCtc } = req.body;
-      if (!education || !experience || !expectedCtc) {
-        return res.status(400).json({ success: false, message: "Missing required education/experience fields." });
+      const { experience, skills } = req.body;
+      if (!experience || !skills || (Array.isArray(skills) && skills.length === 0)) {
+        return res.status(400).json({ success: false, message: "Experience and skills are mandatory." });
       }
       return res.json({
         success: true,
         stage: 3,
-        predefinedSkills: skillsData,
-        nextFields: { skills: { type: "array", required: false } }
+        nextFields: { projects: { type: "array", required: false } },
+        screeningQuestions: screeningData
       });
     }
 
     if (isWizard && stage === 3) {
       return res.json({
         success: true,
-        stage: 4,
-        nextFields: { projects: { type: "array", required: false } },
-        screeningQuestions: screeningData
+        stage: 4
       });
     }
 
     if (!isWizard || stage === 4) {
       const {
-        education, experience, lastCtc, expectedCtc, preferredLocation, requirements,
+        education, experience, experienceDetails, lastCtc, expectedCtc, preferredLocation, requirements,
         skills, projects
       } = req.body;
 
@@ -172,10 +170,12 @@ router.post("/", upload.single("resume"), async (req, res) => {
         phone,
         locationReferred: location,
         experience: parsedExperience || 'N/A',
+        experienceDetails: Array.isArray(experienceDetails) ? experienceDetails : [],
+        education: Array.isArray(education) ? education : [],
         expectedCtc: parsedExpectedCtc || '0',
         previousCtc: parsedPreviousCtc,
         requirements: parsedRequirements || 'None',
-        skills: skills || [],
+        skills: Array.isArray(skills) ? skills : (skills ? [skills] : []),
         projects: projects || [],
         dynamicFields: dynamic,
         resumeUrl: req.file ? (req.file.location || req.file.path) : null
