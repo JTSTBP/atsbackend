@@ -2,6 +2,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const SourceCandidate = require("../models/SourceCandidate");
+const Candidate = require("../models/CandidatesByJob");
 const Job = require("../models/Jobs");
 const User = require("../models/Users");
 const upload = require("../middleware/upload");
@@ -21,9 +22,12 @@ const screeningData = require('../data/screeningQuestions.json');
  */
 router.post("/", upload.single("resume"), async (req, res) => {
   try {
-    const stage = Number(req.body.stage) || 1;
+    // If stage is provided, it's the wizard. If not, it's a direct submission.
+    const isWizard = !!req.body.stage;
+    const stage = Number(req.body.stage) || 4; // Default to 4 (final stage) for direct submission
     const { jobId, createdBy } = req.body;
-    // Backwards‑compatible field mapping – accept alternative key names from the frontend
+    
+    // Backwards-compatible field mapping
     let dynamic = {};
     if (req.body.dynamicFields) {
       try {
@@ -32,14 +36,21 @@ router.post("/", upload.single("resume"), async (req, res) => {
         console.warn('Failed to parse dynamicFields JSON');
       }
     }
-    const fullName = req.body.fullName || req.body.candidateName || dynamic.candidateName || '';
-    const email = req.body.email || req.body.Email || dynamic.Email || '';
-    const phone = req.body.phone || req.body.Phone || dynamic.Phone || '';
-    const location = req.body.location || req.body.locationReferred || dynamic.locationReferred || '';
-    // Debug: log incoming payload
-    console.log('Source Candidate payload:', req.body);
+    
+    // Find fields case-insensitively in dynamic object if not found directly
+    const getDynField = (keys) => {
+      for (const [k, v] of Object.entries(dynamic)) {
+        if (keys.some(key => key.toLowerCase() === k.toLowerCase())) return v;
+      }
+      return '';
+    };
 
-    // Basic job/recruiter validation (shared for all stages)
+    const fullName = req.body.fullName || req.body.fullname || req.body.candidateName || getDynField(['candidateName', 'fullName', 'name']) || '';
+    const email = req.body.email || req.body.Email || getDynField(['Email']) || '';
+    const phone = req.body.phone || req.body.Phone || getDynField(['Phone']) || '';
+    const location = req.body.location || req.body.locationReferred || getDynField(['locationReferred', 'location']) || '';
+
+    // Basic job/recruiter validation
     const job = await Job.findById(jobId);
     if (!job) {
       return res.status(404).json({ success: false, message: "Job not found." });
@@ -49,19 +60,61 @@ router.post("/", upload.single("resume"), async (req, res) => {
       return res.status(403).json({ success: false, message: `Job is not open for recruitment.` });
     }
 
+    // Always do duplicate check for new candidates (stage 1 or direct submission)
+    if (stage === 1 || !isWizard) {
+      if (email || phone) {
+        const queryOrSource = [];
+        const queryOrRegular = [];
+        
+        if (email) {
+          // Add regex for case-insensitive exact match
+          const emailRegex = new RegExp(`^${email}$`, 'i');
+          queryOrSource.push({ email: emailRegex });
+          queryOrRegular.push({ "dynamicFields.Email": emailRegex });
+          queryOrRegular.push({ "dynamicFields.email": emailRegex });
+        }
+        if (phone) {
+          queryOrSource.push({ phone });
+          queryOrRegular.push({ "dynamicFields.Phone": phone });
+          queryOrRegular.push({ "dynamicFields.phone": phone });
+        }
+        
+        let duplicateSource = null;
+        let duplicateRegular = null;
+        
+        if (queryOrSource.length > 0) {
+          duplicateSource = await SourceCandidate.findOne({ jobId, $or: queryOrSource });
+        }
+        
+        if (!duplicateSource && queryOrRegular.length > 0) {
+          duplicateRegular = await Candidate.findOne({ jobId, $or: queryOrRegular });
+        }
+
+        const duplicateObj = duplicateSource || duplicateRegular;
+
+        if (duplicateObj) {
+          const duplicateField = [];
+          const foundEmail = duplicateObj.email || duplicateObj.dynamicFields?.Email || duplicateObj.dynamicFields?.email;
+          const foundPhone = duplicateObj.phone || duplicateObj.dynamicFields?.Phone || duplicateObj.dynamicFields?.phone;
+          
+          if (email && foundEmail && String(foundEmail).toLowerCase() === String(email).toLowerCase()) {
+            duplicateField.push("email");
+          }
+          if (phone && foundPhone && String(foundPhone) === String(phone)) {
+            duplicateField.push("phone number");
+          }
+          
+          const fieldMessage = duplicateField.length > 0 ? duplicateField.join(" and ") : "email or phone";
+          return res.status(400).json({ success: false, message: `A candidate with this ${fieldMessage} already exists for the selected job.` });
+        }
+      }
+    }
+
     // ------------------- Stage handling -------------------
-    if (stage === 1) {
-      // Personal details stage
-      // Use the mapped variables above for validation
+    if (isWizard && stage === 1) {
       if (!fullName || !email || !phone || !location) {
         return res.status(400).json({ success: false, message: "Missing required personal details." });
       }
-      // Duplicate check for same job
-      const duplicate = await SourceCandidate.findOne({ jobId, $or: [{ email }, { phone }] });
-      if (duplicate) {
-        return res.json({ success: false, message: "A candidate with this email or phone already exists for the selected job." });
-      }
-      // Return next stage spec
       return res.json({
         success: true,
         stage: 2,
@@ -76,13 +129,11 @@ router.post("/", upload.single("resume"), async (req, res) => {
       });
     }
 
-    if (stage === 2) {
-      // Education & experience stage
-      const { education, experience, lastCtc, expectedCtc, preferredLocation, requirements } = req.body;
+    if (isWizard && stage === 2) {
+      const { education, experience, expectedCtc } = req.body;
       if (!education || !experience || !expectedCtc) {
         return res.status(400).json({ success: false, message: "Missing required education/experience fields." });
       }
-      // Return predefined skills for next stage
       return res.json({
         success: true,
         stage: 3,
@@ -91,8 +142,7 @@ router.post("/", upload.single("resume"), async (req, res) => {
       });
     }
 
-    if (stage === 3) {
-      // Skills stage – nothing to validate, move on
+    if (isWizard && stage === 3) {
       return res.json({
         success: true,
         stage: 4,
@@ -101,13 +151,17 @@ router.post("/", upload.single("resume"), async (req, res) => {
       });
     }
 
-    if (stage === 4) {
-      // Projects stage – optional, proceed to final creation
+    if (!isWizard || stage === 4) {
       const {
-        fullName, email, phone, location,
         education, experience, lastCtc, expectedCtc, preferredLocation, requirements,
         skills, projects
       } = req.body;
+
+      // Extract previously sent fields from dynamic if needed
+      let parsedExperience = experience || getDynField(['experience']);
+      let parsedExpectedCtc = expectedCtc || getDynField(['expectedCtc']);
+      let parsedPreviousCtc = lastCtc || req.body.previousCtc || getDynField(['previousCtc', 'lastCtc']);
+      let parsedRequirements = requirements || getDynField(['requirements']);
 
       // Build candidate document
       const candidate = new SourceCandidate({
@@ -116,21 +170,19 @@ router.post("/", upload.single("resume"), async (req, res) => {
         fullName,
         email,
         phone,
-        location,
-        education,
-        experience,
-        lastCtc,
-        expectedCtc,
-        preferredLocation,
-        requirements,
+        locationReferred: location,
+        experience: parsedExperience || 'N/A',
+        expectedCtc: parsedExpectedCtc || '0',
+        previousCtc: parsedPreviousCtc,
+        requirements: parsedRequirements || 'None',
         skills: skills || [],
         projects: projects || [],
+        dynamicFields: dynamic,
         resumeUrl: req.file ? (req.file.location || req.file.path) : null
       });
 
       await candidate.save();
 
-      // Log activity & increment job count
       logActivity(createdBy, "created", "source_candidate", `Created source candidate`, candidate._id, "SourceCandidate");
       await Job.findByIdAndUpdate(jobId, { $inc: { candidateCount: 1 } }, { new: true });
 
@@ -140,11 +192,10 @@ router.post("/", upload.single("resume"), async (req, res) => {
       return res.json({ success: true, candidate: candidateWithSignedUrl });
     }
 
-    // If stage not recognized
     return res.status(400).json({ success: false, message: "Invalid stage value." });
   } catch (error) {
     console.error("Error in source candidate wizard:", error);
-    return res.status(500).json({ success: false, message: "Server error while processing candidate wizard." });
+    return res.status(500).json({ success: false, message: "Server error while processing candidate wizard.", error: error.message });
   }
 });
 
