@@ -671,7 +671,7 @@ router.post("/", upload.single("resume"), async (req, res) => {
 // 🟣 Get Candidates with Role-Based Access Control (Pagination & Filtering)
 router.get("/role-based-candidates", async (req, res) => {
   try {
-    const { userId, designation, page, limit, search, status, client, jobTitle, stage, startDate, endDate, joinStartDate, joinEndDate, selectStartDate, selectEndDate, reporterId, jobStatus } = req.query;
+    const { userId, designation, page, limit, search, status, client, jobTitle, stage, startDate, endDate, joinStartDate, joinEndDate, selectStartDate, selectEndDate, reporterId, recruiterId, jobStatus } = req.query;
 
     console.log("🔍 Role-Based Candidates Request:", {
       userId, designation, page, limit, startDate, endDate, joinStartDate, joinEndDate, selectStartDate, selectEndDate, reporterId, jobStatus
@@ -919,6 +919,7 @@ router.get("/role-based-candidates", async (req, res) => {
           ...(client && client !== "all" ? { "client.companyName": new RegExp(client, "i") } : {}),
           ...(jobTitle && jobTitle !== "all" ? { "job.title": new RegExp(jobTitle, "i") } : {}),
           ...(reporterId && reporterId !== "all" ? { "reporter._id": new mongoose.Types.ObjectId(reporterId) } : {}),
+          ...(recruiterId && recruiterId !== "all" ? { "creator._id": new mongoose.Types.ObjectId(recruiterId) } : {}),
           ...(jobStatus && jobStatus !== "all" ? { "job.status": jobStatus } : {})
         }
       },

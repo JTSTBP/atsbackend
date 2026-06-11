@@ -10,10 +10,10 @@ const authRoutes = require("./routes/Authroutes");
 const leaveRoutes = require("./routes/Leavesroutes");
 const jobRoutes = require("./routes/Jobroutes");
 const CandidatesJob = require("./routes/CandidatesByJobroutes");
-const sourceCandidateRoutes = require("./routes/SourceCandidateroutes");
-const clientRoutes = require("./routes/Clientroutes");
+
 const sessionRoutes = require("./routes/Sessionroutes");
 const activityRoutes = require("./routes/Activityroutes");
+const clientRoutes = require("./routes/Clientroutes");
 const invoiceRoutes = require("./routes/Invoiceroutes");
 const expenseRoutes = require("./routes/Expenseroutes");
 const attendanceRoutes = require("./routes/Attendanceroutes");
@@ -35,7 +35,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/leaves", leaveRoutes);
 app.use("/api/jobs", jobRoutes);
 app.use("/api/CandidatesJob", CandidatesJob);
-app.use("/api/source-candidates", sourceCandidateRoutes);
+
 app.use("/api/clients", clientRoutes);
 app.use("/api/sessions", sessionRoutes);
 app.use("/api/activities", activityRoutes);
