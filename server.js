@@ -18,6 +18,7 @@ const invoiceRoutes = require("./routes/Invoiceroutes");
 const expenseRoutes = require("./routes/Expenseroutes");
 const attendanceRoutes = require("./routes/Attendanceroutes");
 const returnInvoiceRoutes = require("./routes/ReturnInvoiceroutes");
+const sourceCandidateRoutes = require("./routes/SourceCandidateRoutes");
 
 // Initialize Express app
 const app = express();
@@ -43,6 +44,7 @@ app.use("/api/invoices", invoiceRoutes);
 app.use("/api/expenses", expenseRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/return-invoices", returnInvoiceRoutes);
+app.use("/api/source-candidates", sourceCandidateRoutes);
 
 // Serve frontend dist
 app.use(express.static(path.join(__dirname, "dist")));

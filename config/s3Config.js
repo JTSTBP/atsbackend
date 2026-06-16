@@ -327,5 +327,6 @@ module.exports = {
     hasR2Credentials,
     hasCredentials,
     getSignedUrl,
-    deleteFile
+    deleteFile,
+    extractBucketAndKey
 };
