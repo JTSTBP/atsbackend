@@ -282,11 +282,31 @@ const getSignedUrl = (fileUrl) => {
             console.log(`🔗 Generating signed URL for Bucket: ${bucket}, Key: ${key}`);
 
             if (key && bucket) {
-                return s3.getSignedUrl('getObject', {
+                let filename = key.split('/').pop() || 'resume';
+                filename = filename.replace(/^\d+-/, ''); // Remove leading timestamps
+
+                const params = {
                     Bucket: bucket,
                     Key: key,
                     Expires: 60 * 60 // 1 hour
-                });
+                };
+
+                const ext = filename.split('.').pop().toLowerCase();
+                let mimeType = null;
+                if (ext === 'pdf') {
+                    mimeType = 'application/pdf';
+                } else if (ext === 'docx') {
+                    mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+                } else if (ext === 'doc') {
+                    mimeType = 'application/msword';
+                }
+
+                if (mimeType) {
+                    params.ResponseContentType = mimeType;
+                }
+                params.ResponseContentDisposition = `inline; filename="${filename}"`;
+
+                return s3.getSignedUrl('getObject', params);
             }
         } catch (error) {
             console.error("Error generating signed URL:", error);
@@ -302,11 +322,32 @@ const getSignedUrl = (fileUrl) => {
                 const bucket = hasR2Credentials ? process.env.R2_BUCKET_NAME : process.env.AWS_S3_BUCKET_NAME;
                 if (bucket) {
                     console.log(`🔗 Signing migrated local path for Bucket: ${bucket}, Key: ${fileUrl}`);
-                    return s3.getSignedUrl('getObject', {
+
+                    let filename = fileUrl.split('/').pop() || 'resume';
+                    filename = filename.replace(/^\d+-/, '');
+
+                    const params = {
                         Bucket: bucket,
                         Key: fileUrl,
                         Expires: 60 * 60 // 1 hour
-                    });
+                    };
+
+                    const ext = filename.split('.').pop().toLowerCase();
+                    let mimeType = null;
+                    if (ext === 'pdf') {
+                        mimeType = 'application/pdf';
+                    } else if (ext === 'docx') {
+                        mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+                    } else if (ext === 'doc') {
+                        mimeType = 'application/msword';
+                    }
+
+                    if (mimeType) {
+                        params.ResponseContentType = mimeType;
+                    }
+                    params.ResponseContentDisposition = `inline; filename="${filename}"`;
+
+                    return s3.getSignedUrl('getObject', params);
                 }
             } catch (error) {
                 console.error("Error signing migrated local path:", error);

@@ -8,6 +8,7 @@ const { protect } = require("../middleware/authMiddleware");
 const SourcedCandidate = require("../models/SourcedCandidate");
 const Job = require("../models/Jobs");
 const { extractTextFromBuffer, parseResumeText } = require("../utils/resumeParser");
+const { getSignedUrl } = require("../config/s3Config");
 
 /**
  * @route   POST /api/source-candidates/upload
@@ -162,13 +163,18 @@ router.post("/save", protect, async (req, res) => {
 
     await sourcedCandidate.save();
 
+    const candidateObj = sourcedCandidate.toObject();
+    if (candidateObj.resumeFileUrl) {
+      candidateObj.resumeFileUrl = getSignedUrl(candidateObj.resumeFileUrl);
+    }
+
     res.status(201).json({
       success: true,
       message: "Sourced candidate saved successfully!",
       candidate: {
         _id: sourcedCandidate._id,
         sourceIdentifier: sourcedCandidate.sourceIdentifier,
-        ...sourcedCandidate.toObject()
+        ...candidateObj
       }
     });
   } catch (error) {
@@ -235,22 +241,25 @@ router.get("/", protect, async (req, res) => {
       if (toDate) filter.createdAt.$lte = new Date(toDate);
     }
 
-    // Restrict to recruiter unless admin
-    if (req.user.designation === "Recruiter") {
-      filter.recruiterId = req.user._id;
-    }
-
     const totalCount = await SourcedCandidate.countDocuments(filter);
     const candidates = await SourcedCandidate.find(filter)
       .populate("recruiterId", "name email")
       .populate("requirementId", "title department status")
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(numericLimit);
+      .limit(numericLimit)
+      .lean();
+
+    const signedCandidates = candidates.map((candidate) => {
+      if (candidate.resumeFileUrl) {
+        candidate.resumeFileUrl = getSignedUrl(candidate.resumeFileUrl);
+      }
+      return candidate;
+    });
 
     res.status(200).json({
       success: true,
-      candidates,
+      candidates: signedCandidates,
       totalCount,
       page: numericPage,
       limit: numericLimit
