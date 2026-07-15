@@ -45,18 +45,40 @@ const DEGREES = [
  * @returns {Promise<string>} Extracted text
  */
 async function extractTextFromBuffer(buffer, mimeType) {
-  const isDocx = mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || 
-                 mimeType === "docx";
+  console.log("extractTextFromBuffer called. MIME:", mimeType, "buffer size:", buffer.length);
   const isPdf = mimeType === "application/pdf" || mimeType === "pdf";
 
   if (isPdf) {
     try {
       const data = await pdfParse(buffer);
-      return data.text || "";
+      const textLength = data.text ? data.text.length : 0;
+      console.log("PDF parsing succeeded. Text length:", textLength);
+      console.log("PDF text snippet:", data.text ? data.text.substring(0, 200) : "");
+      if (textLength > 50) {
+        return data.text || "";
+      }
+      // Fallback to pdfjs if extracted text is too short
+      console.warn("pdf-parse returned insufficient text, falling back to pdfjs.");
     } catch (err) {
       console.error("PDF Parsing Error:", err);
-      // Fallback: try reading as raw string if it's text-based
-      return buffer.toString("utf8");
+    }
+    try {
+      const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+      const loadingTask = pdfjsLib.getDocument({ data: buffer });
+      const pdfDoc = await loadingTask.promise;
+      let fullText = '';
+      for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+        const page = await pdfDoc.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        const strings = textContent.items.map(item => item.str);
+        fullText += strings.join(' ') + '\n';
+      }
+      console.log("pdfjs fallback succeeded. Text length:", fullText.length);
+      return fullText;
+    } catch (fallbackErr) {
+      console.error("pdfjs fallback error:", fallbackErr);
+      // Final fallback: return raw buffer as string
+      return buffer.toString('utf8');
     }
   } else if (isDocx) {
     try {
