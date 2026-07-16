@@ -1,6 +1,6 @@
 const express = require("express");
 const { protect } = require("../middleware/authMiddleware");
-const { verifyEmailTransport, getEmailDiagnostics, formatEmailErrorResponse } = require("../services/emailService");
+const { EMAIL_SERVICE_VERSION, verifyEmailTransport, getEmailDiagnostics, formatEmailErrorResponse } = require("../services/emailService");
 
 const router = express.Router();
 
@@ -18,6 +18,7 @@ router.get("/diagnostics", protect, async (req, res) => {
         return res.status(200).json({
             success: true,
             message: "SMTP verification succeeded.",
+            emailServiceVersion: EMAIL_SERVICE_VERSION,
             diagnostics,
             ...result,
         });

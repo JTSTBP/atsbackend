@@ -3,6 +3,8 @@ const dns = require("dns");
 const net = require("net");
 const nodemailer = require("nodemailer");
 
+const EMAIL_SERVICE_VERSION = "gmail-smtp-fallback-v2-2026-07-16";
+
 if (typeof dns.setDefaultResultOrder === "function") {
     dns.setDefaultResultOrder("ipv4first");
 }
@@ -378,7 +380,7 @@ const runSmtpAttempt = async ({ mode, auth, mailOptions, verifyOnly, traceId }) 
     }
 };
 
-const buildSmtpFailure = ({ traceId, attempts, lastError }) => {
+const buildSmtpFailure = ({ traceId, attempts, lastError, diagnostics }) => {
     const code = attempts.some((attempt) => attempt.errorCode === "SMTP_AUTH_FAILED")
         ? "SMTP_AUTH_FAILED"
         : attempts.some((attempt) => attempt.errorCode === "GMAIL_DAILY_LIMIT_EXCEEDED")
@@ -395,6 +397,8 @@ const buildSmtpFailure = ({ traceId, attempts, lastError }) => {
     error.code = code;
     error.traceId = traceId;
     error.smtpAttempts = attempts;
+    error.diagnostics = diagnostics;
+    error.emailServiceVersion = EMAIL_SERVICE_VERSION;
     return error;
 };
 
@@ -459,7 +463,12 @@ const sendMail = async ({ fromName = "Jobs Territory", from, to, cc, bcc, replyT
         }
     }
 
-    throw buildSmtpFailure({ traceId, attempts, lastError });
+    const connectionOnlyFailure = attempts.length > 0 && attempts.every((attempt) => attempt.errorCode === "SMTP_CONNECTION_FAILED");
+    const diagnostics = connectionOnlyFailure
+        ? await getEmailDiagnostics().catch(error => ({ error: error.message }))
+        : undefined;
+
+    throw buildSmtpFailure({ traceId, attempts, lastError, diagnostics });
 };
 
 const verifyEmailTransport = async (auth = {}) => {
@@ -487,17 +496,21 @@ const verifyEmailTransport = async (auth = {}) => {
         lastError = result.error;
     }
 
-    throw buildSmtpFailure({ traceId, attempts, lastError });
+    const diagnostics = await getEmailDiagnostics().catch(error => ({ error: error.message }));
+    throw buildSmtpFailure({ traceId, attempts, lastError, diagnostics });
 };
 
 const formatEmailErrorResponse = (error) => ({
     code: error.code || classifySmtpError(error),
     traceId: error.traceId,
+    emailServiceVersion: error.emailServiceVersion || EMAIL_SERVICE_VERSION,
     smtpAttempts: error.smtpAttempts,
+    diagnostics: error.diagnostics,
     message: error.message || "Email sending failed.",
 });
 
 module.exports = {
+    EMAIL_SERVICE_VERSION,
     createEmailTransporter,
     sendMail,
     verifyEmailTransport,
