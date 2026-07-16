@@ -1,6 +1,11 @@
 const crypto = require("crypto");
 const dns = require("dns");
+const net = require("net");
 const nodemailer = require("nodemailer");
+
+if (typeof dns.setDefaultResultOrder === "function") {
+    dns.setDefaultResultOrder("ipv4first");
+}
 
 const clean = (value) => (typeof value === "string" ? value.trim() : value);
 
@@ -43,13 +48,11 @@ const getFallbackModes = () => {
     const primaryMode = clean(process.env.SMTP_TRANSPORT_MODE) || "direct-ipv4-587";
     const defaults = [
         "direct-ipv4-587",
-        "direct-ipv4-465",
         "ipv4-lookup-587",
-        "ipv4-lookup-465",
         "ssl-465",
-        "gmail-service",
         "default-587",
         "custom-socket-587",
+        "gmail-service",
     ];
     return [primaryMode, ...defaults.filter((mode) => mode !== primaryMode)];
 };
@@ -91,6 +94,109 @@ const resolveGmailIpv4 = async (host) => {
     return addresses[0];
 };
 
+const lookupIpv4Only = (hostname, options, callback) => {
+    dns.lookup(hostname, { ...options, family: 4 }, callback);
+};
+
+const getGmailIpv4Socket = (options, callback) => {
+    const config = getDefaultEmailConfig();
+    dns.resolve4(config.host, (dnsError, addresses) => {
+        if (dnsError) return callback(dnsError);
+        const address = addresses && addresses[0];
+        if (!address) return callback(new Error(`No IPv4 address found for ${config.host}`));
+
+        const socket = net.connect({
+            host: address,
+            port: options.port || 587,
+            family: 4,
+            timeout: config.connectionTimeout,
+        });
+
+        socket.once("connect", () => callback(null, { connection: socket }));
+        socket.once("timeout", () => {
+            socket.destroy(new Error(`SMTP socket timed out after ${config.connectionTimeout}ms`));
+        });
+        socket.once("error", callback);
+    });
+};
+
+const tcpConnectTest = ({ host, port, family = 4, timeoutMs } = {}) => new Promise((resolve) => {
+    const startedAt = Date.now();
+    const socket = net.connect({
+        host,
+        port,
+        family,
+        timeout: timeoutMs || getDefaultEmailConfig().connectionTimeout,
+    });
+    const finish = result => {
+        socket.removeAllListeners();
+        socket.destroy();
+        resolve({
+            ...result,
+            host,
+            port,
+            family,
+            durationMs: Date.now() - startedAt,
+        });
+    };
+    socket.once("connect", () => finish({ ok: true }));
+    socket.once("timeout", () => finish({ ok: false, code: "TIMEOUT", message: `TCP connection timed out` }));
+    socket.once("error", error => finish({ ok: false, code: error.code, message: error.message }));
+});
+
+const getEmailDiagnostics = async () => {
+    const config = getDefaultEmailConfig();
+    const diagnostics = {
+        envStatus: {
+            SMTP_HOST: Boolean(process.env.SMTP_HOST),
+            SMTP_USER: Boolean(process.env.SMTP_USER),
+            SMTP_PASS: Boolean(process.env.SMTP_PASS),
+            EMAIL_ID: Boolean(process.env.EMAIL_ID),
+            EMAIL_USER: Boolean(process.env.EMAIL_USER),
+            APP_PASSWORD: Boolean(process.env.APP_PASSWORD),
+            EMAIL_PASS: Boolean(process.env.EMAIL_PASS),
+            SMTP_TRANSPORT_MODE: process.env.SMTP_TRANSPORT_MODE || null,
+            SMTP_FALLBACK_MODES: process.env.SMTP_FALLBACK_MODES || null,
+            resolvedHost: config.host,
+            hasResolvedUser: Boolean(config.user),
+            hasResolvedPassword: Boolean(config.pass),
+        },
+        dns: {},
+        tcpTests: [],
+        fallbackModes: getFallbackModes(),
+    };
+
+    try {
+        diagnostics.dns.lookupAll = await dns.promises.lookup(config.host, { all: true });
+    } catch (error) {
+        diagnostics.dns.lookupAllError = error.message;
+    }
+
+    try {
+        diagnostics.dns.resolve4 = await dns.promises.resolve4(config.host);
+    } catch (error) {
+        diagnostics.dns.resolve4Error = error.message;
+    }
+
+    try {
+        diagnostics.dns.resolve6 = await dns.promises.resolve6(config.host);
+    } catch (error) {
+        diagnostics.dns.resolve6Error = error.message;
+    }
+
+    diagnostics.tcpTests.push(await tcpConnectTest({ host: config.host, port: 587, family: 0 }));
+    diagnostics.tcpTests.push(await tcpConnectTest({ host: config.host, port: 587, family: 4 }));
+    diagnostics.tcpTests.push(await tcpConnectTest({ host: config.host, port: 465, family: 4 }));
+
+    const firstIpv4 = diagnostics.dns.resolve4?.[0];
+    if (firstIpv4) {
+        diagnostics.tcpTests.push(await tcpConnectTest({ host: firstIpv4, port: 587, family: 4 }));
+        diagnostics.tcpTests.push(await tcpConnectTest({ host: firstIpv4, port: 465, family: 4 }));
+    }
+
+    return diagnostics;
+};
+
 const buildTransportOptions = async (mode, auth) => {
     const config = getDefaultEmailConfig();
     const common = {
@@ -112,6 +218,7 @@ const buildTransportOptions = async (mode, auth) => {
             port: 587,
             secure: false,
             requireTLS: true,
+            lookup: lookupIpv4Only,
             name: config.host,
             tls: { ...common.tls, servername: config.host },
             _resolvedHost: ip,
@@ -125,6 +232,7 @@ const buildTransportOptions = async (mode, auth) => {
             host: ip,
             port: 465,
             secure: true,
+            lookup: lookupIpv4Only,
             name: config.host,
             tls: { ...common.tls, servername: config.host },
             _resolvedHost: ip,
@@ -139,6 +247,7 @@ const buildTransportOptions = async (mode, auth) => {
             secure: false,
             requireTLS: true,
             family: 4,
+            lookup: lookupIpv4Only,
         };
     }
 
@@ -149,6 +258,7 @@ const buildTransportOptions = async (mode, auth) => {
             port: 465,
             secure: true,
             family: 4,
+            lookup: lookupIpv4Only,
         };
     }
 
@@ -159,6 +269,7 @@ const buildTransportOptions = async (mode, auth) => {
             port: 465,
             secure: true,
             family: 4,
+            lookup: lookupIpv4Only,
         };
     }
 
@@ -176,6 +287,7 @@ const buildTransportOptions = async (mode, auth) => {
             port: 587,
             secure: false,
             requireTLS: true,
+            tls: { ...common.tls, servername: config.host },
         };
     }
 
@@ -186,6 +298,9 @@ const buildTransportOptions = async (mode, auth) => {
             port: 587,
             secure: false,
             requireTLS: true,
+            family: 4,
+            lookup: lookupIpv4Only,
+            getSocket: getGmailIpv4Socket,
             dnsTimeout: config.connectionTimeout,
             pool: false,
         };
@@ -239,7 +354,9 @@ const runSmtpAttempt = async ({ mode, auth, mailOptions, verifyOnly, traceId }) 
         attempt.host = options._resolvedHost || options.host;
         attempt.port = options.port;
         attempt.secure = !!options.secure;
-        console.log(`[SMTP ${traceId}] Starting attempt "${mode}" via ${attempt.host}:${attempt.port} secure=${attempt.secure}`);
+        attempt.hasLookup = !!options.lookup;
+        attempt.hasGetSocket = !!options.getSocket;
+        console.log(`[SMTP ${traceId}] Starting attempt "${mode}" via ${attempt.host}:${attempt.port} secure=${attempt.secure} lookup=${attempt.hasLookup} getSocket=${attempt.hasGetSocket}`);
 
         const transporter = nodemailer.createTransport(options);
         if (verifyOnly) {
@@ -384,5 +501,6 @@ module.exports = {
     createEmailTransporter,
     sendMail,
     verifyEmailTransport,
+    getEmailDiagnostics,
     formatEmailErrorResponse,
 };
