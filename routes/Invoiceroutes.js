@@ -388,7 +388,7 @@ router.delete('/:id', async (req, res) => {
 const { generateInvoicePDF } = require('../utils/pdfGenerator');
 const fs = require('fs');
 const path = require('path');
-const { sendMail } = require('../services/emailService');
+const { sendMail, formatEmailErrorResponse } = require('../services/emailService');
 
 // Send Invoice Email
 router.post('/send-email', async (req, res) => {
@@ -459,7 +459,10 @@ router.post('/send-email', async (req, res) => {
         if (fs.existsSync(path.join(__dirname, `../temp/invoice_${req.body.invoiceId}.pdf`))) {
             fs.unlinkSync(path.join(__dirname, `../temp/invoice_${req.body.invoiceId}.pdf`));
         }
-        res.status(500).json({ message: "Error sending email", error: error.message });
+        res.status(500).json({
+            message: "Error sending email",
+            ...formatEmailErrorResponse(error),
+        });
     }
 });
 

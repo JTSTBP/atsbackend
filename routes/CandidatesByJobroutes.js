@@ -11,7 +11,7 @@ const nodemailer = require("nodemailer");
 const fs = require('fs');
 const path = require('path');
 const { s3, getSignedUrl, deleteFile } = require('../config/s3Config');
-const { sendMail } = require('../services/emailService');
+const { sendMail, formatEmailErrorResponse } = require('../services/emailService');
 
 
 // Helper function to send email notification to mentor when a candidate is created
@@ -2089,7 +2089,10 @@ router.post("/send-email", async (req, res) => {
     res.json({ success: true, message: "Email sent successfully" });
   } catch (error) {
     console.error("Error sending email:", error);
-    res.status(500).json({ success: false, message: "Failed to send email. Check credentials." });
+    res.status(500).json({
+      success: false,
+      ...formatEmailErrorResponse(error),
+    });
   }
 });
 

@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const Attendance = require("../models/Attendance");
 const User = require("../models/Users");
 const { protect } = require("../middleware/authMiddleware");
-const { sendMail } = require("../services/emailService");
+const { sendMail, formatEmailErrorResponse } = require("../services/emailService");
 
 const router = express.Router();
 
@@ -652,9 +652,10 @@ router.post("/send-report-email", protect, async (req, res) => {
 
     } catch (error) {
         console.error("Error sending attendance report email:", error);
+        const emailError = formatEmailErrorResponse(error);
         res.status(500).json({
             success: false,
-            message: error.message || "Failed to send email. Please try again.",
+            ...emailError,
         });
     }
 });
