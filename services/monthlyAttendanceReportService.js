@@ -1,7 +1,7 @@
-const nodemailer = require("nodemailer");
 const Attendance = require("../models/Attendance");
 const User = require("../models/Users");
 const AttendanceReportLog = require("../models/AttendanceReportLog");
+const { sendMail } = require("./emailService");
 
 const REPORT_TYPE = "monthly_recruiter_attendance";
 
@@ -202,37 +202,6 @@ const buildMonthlyRecruiterAttendanceEmail = (reportData, period) => {
     `;
 };
 
-const sendEmail = async ({ recipient, subject, html }) => {
-    const emailUser = process.env.EMAIL_ID;
-    const emailPass = process.env.APP_PASSWORD;
-    const replyToEmail = process.env.SENDER_ID;
-
-    if (!emailUser || !emailPass) {
-        throw new Error("Email SMTP credentials (EMAIL_ID or APP_PASSWORD) are not configured on the server.");
-    }
-
-    const transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: {
-            user: emailUser.trim(),
-            pass: emailPass.trim(),
-        },
-    });
-
-    const mailOptions = {
-        from: `"Jobs Territory Attendance" <${emailUser.trim()}>`,
-        to: recipient.trim(),
-        subject,
-        html,
-    };
-
-    if (replyToEmail) {
-        mailOptions.replyTo = replyToEmail.trim();
-    }
-
-    await transporter.sendMail(mailOptions);
-};
-
 const sendMonthlyRecruiterAttendanceReport = async ({ force = false, referenceDate = new Date() } = {}) => {
     const period = getPreviousMonthRange(referenceDate);
     const recipient = process.env.MONTHLY_ATTENDANCE_RECIPIENT || process.env.SENDER_ID;
@@ -265,7 +234,12 @@ const sendMonthlyRecruiterAttendanceReport = async ({ force = false, referenceDa
     const subject = `Monthly Recruiter Attendance Report - ${period.monthName} ${period.year}`;
 
     try {
-        await sendEmail({ recipient, subject, html });
+        await sendMail({
+            fromName: "Jobs Territory Attendance",
+            to: recipient.trim(),
+            subject,
+            html,
+        });
 
         await AttendanceReportLog.create({
             reportType: REPORT_TYPE,

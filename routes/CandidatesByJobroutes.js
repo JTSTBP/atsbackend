@@ -11,6 +11,7 @@ const nodemailer = require("nodemailer");
 const fs = require('fs');
 const path = require('path');
 const { s3, getSignedUrl, deleteFile } = require('../config/s3Config');
+const { sendMail } = require('../services/emailService');
 
 
 // Helper function to send email notification to mentor when a candidate is created
@@ -1925,16 +1926,6 @@ router.post("/send-email", async (req, res) => {
       return res.status(404).json({ success: false, message: "No candidates found" });
     }
 
-    const nodemailer = require("nodemailer");
-
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: senderEmail,
-        pass: appPassword,
-      },
-    });
-
     let htmlContent = "";
     let subject = "";
 
@@ -2081,16 +2072,19 @@ router.post("/send-email", async (req, res) => {
       }
     });
 
-    const mailOptions = {
+    await sendMail({
+      fromName: "Jobs Territory Recruitment",
       from: senderEmail,
       to: recipientEmails,
       cc: ccEmails,
       subject: subject,
       html: htmlContent,
-      attachments: attachments
-    };
-
-    await transporter.sendMail(mailOptions);
+      attachments: attachments,
+      auth: {
+        user: senderEmail,
+        pass: appPassword,
+      },
+    });
 
     res.json({ success: true, message: "Email sent successfully" });
   } catch (error) {

@@ -1,9 +1,9 @@
 const express = require("express");
 const mongoose = require("mongoose");
-const nodemailer = require("nodemailer");
 const Attendance = require("../models/Attendance");
 const User = require("../models/Users");
 const { protect } = require("../middleware/authMiddleware");
+const { sendMail } = require("../services/emailService");
 
 const router = express.Router();
 
@@ -623,27 +623,8 @@ router.post("/send-report-email", protect, async (req, res) => {
             </body>
             </html>
         `;
+        /*
 
-        // 7. Send the email using Nodemailer
-        const emailUser = process.env.EMAIL_ID;
-        const emailPass = process.env.APP_PASSWORD;
-        const replyToEmail = process.env.SENDER_ID;
-
-        if (!emailUser || !emailPass) {
-            throw new Error("Email SMTP credentials (EMAIL_ID or APP_PASSWORD) are not configured on the server.");
-        }
-
-        const transporter = nodemailer.createTransport({
-            service: "gmail",
-            auth: {
-                user: emailUser.trim(),
-                pass: emailPass.trim()
-            }
-        });
-
-        const mailOptions = {
-            from: `"Jobs Territory Attendance" <${emailUser.trim()}>`,
-            to: receiverEmail.trim(),
             subject: subject || `Attendance Report – ${reportingPeriodStr}`,
             html: mainHtmlTemplate,
         };
@@ -654,6 +635,14 @@ router.post("/send-report-email", protect, async (req, res) => {
 
         console.log(`Sending email report. To: ${receiverEmail.trim()}, Subject: ${subject}`);
         await transporter.sendMail(mailOptions);
+        */
+        console.log(`Sending email report. To: ${receiverEmail.trim()}, Subject: ${subject}`);
+        await sendMail({
+            fromName: "Jobs Territory Attendance",
+            to: receiverEmail.trim(),
+            subject: subject || `Attendance Report - ${reportingPeriodStr}`,
+            html: mainHtmlTemplate,
+        });
         console.log("Email sent successfully!");
 
         res.status(200).json({

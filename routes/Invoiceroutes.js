@@ -385,10 +385,10 @@ router.delete('/:id', async (req, res) => {
     }
 });
 
-const nodemailer = require('nodemailer');
 const { generateInvoicePDF } = require('../utils/pdfGenerator');
 const fs = require('fs');
 const path = require('path');
+const { sendMail } = require('../services/emailService');
 
 // Send Invoice Email
 router.post('/send-email', async (req, res) => {
@@ -421,11 +421,9 @@ router.post('/send-email', async (req, res) => {
 
         await generateInvoicePDF(invoice, null, pdfPath);
 
-        // Determine credentials
-        const emailUser = senderEmail || process.env.EMAIL_USER;
-        const emailPass = senderPassword || process.env.EMAIL_PASS;
+        const emailUser = senderEmail || process.env.SMTP_USER || process.env.EMAIL_ID || process.env.EMAIL_USER;
+        const emailPass = senderPassword || process.env.SMTP_PASS || process.env.APP_PASSWORD || process.env.EMAIL_PASS;
 
-        // Send Email
         console.log("Sending email from:", emailUser);
         console.log("Sending email to:", clientEmail);
 
@@ -433,15 +431,8 @@ router.post('/send-email', async (req, res) => {
             throw new Error("Email credentials missing. Please update your profile or check server config.");
         }
 
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: emailUser,
-                pass: emailPass
-            }
-        });
-
-        const mailOptions = {
+        await sendMail({
+            fromName: "Jobs Territory Finance",
             from: emailUser,
             to: clientEmail,
             cc: cc,
@@ -452,10 +443,12 @@ router.post('/send-email', async (req, res) => {
                     filename: `Invoice_${invoice._id}.pdf`,
                     path: pdfPath
                 }
-            ]
-        };
-
-        await transporter.sendMail(mailOptions);
+            ],
+            auth: {
+                user: emailUser,
+                pass: emailPass,
+            },
+        });
 
         // Clean up temp file
         fs.unlinkSync(pdfPath);
