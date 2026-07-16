@@ -41,7 +41,16 @@ const getFallbackModes = () => {
     }
 
     const primaryMode = clean(process.env.SMTP_TRANSPORT_MODE) || "direct-ipv4-587";
-    const defaults = ["direct-ipv4-587", "ipv4-lookup-587", "ssl-465", "default-587", "custom-socket-587"];
+    const defaults = [
+        "direct-ipv4-587",
+        "direct-ipv4-465",
+        "ipv4-lookup-587",
+        "ipv4-lookup-465",
+        "ssl-465",
+        "gmail-service",
+        "default-587",
+        "custom-socket-587",
+    ];
     return [primaryMode, ...defaults.filter((mode) => mode !== primaryMode)];
 };
 
@@ -109,6 +118,19 @@ const buildTransportOptions = async (mode, auth) => {
         };
     }
 
+    if (mode === "direct-ipv4-465") {
+        const ip = await resolveGmailIpv4(config.host);
+        return {
+            ...common,
+            host: ip,
+            port: 465,
+            secure: true,
+            name: config.host,
+            tls: { ...common.tls, servername: config.host },
+            _resolvedHost: ip,
+        };
+    }
+
     if (mode === "ipv4-lookup-587") {
         return {
             ...common,
@@ -120,6 +142,16 @@ const buildTransportOptions = async (mode, auth) => {
         };
     }
 
+    if (mode === "ipv4-lookup-465") {
+        return {
+            ...common,
+            host: config.host,
+            port: 465,
+            secure: true,
+            family: 4,
+        };
+    }
+
     if (mode === "ssl-465") {
         return {
             ...common,
@@ -127,6 +159,13 @@ const buildTransportOptions = async (mode, auth) => {
             port: 465,
             secure: true,
             family: 4,
+        };
+    }
+
+    if (mode === "gmail-service") {
+        return {
+            ...common,
+            service: "gmail",
         };
     }
 

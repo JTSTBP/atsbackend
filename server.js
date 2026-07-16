@@ -20,6 +20,7 @@ const attendanceRoutes = require("./routes/Attendanceroutes");
 const returnInvoiceRoutes = require("./routes/ReturnInvoiceroutes");
 const sourceCandidateRoutes = require("./routes/SourceCandidateRoutes");
 const statementUploadRoutes = require("./routes/StatementUploadroutes");
+const emailDiagnosticsRoutes = require("./routes/EmailDiagnosticsroutes");
 const { startMonthlyAttendanceScheduler } = require("./schedulers/monthlyAttendanceScheduler");
 
 // Initialize Express app
@@ -48,6 +49,7 @@ app.use("/api/attendance", attendanceRoutes);
 app.use("/api/return-invoices", returnInvoiceRoutes);
 app.use("/api/source-candidates", sourceCandidateRoutes);
 app.use("/api/statements", statementUploadRoutes);
+app.use("/api/email", emailDiagnosticsRoutes);
 
 // Serve frontend dist
 app.use(express.static(path.join(__dirname, "dist")));

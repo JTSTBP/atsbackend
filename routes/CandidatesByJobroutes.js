@@ -7,7 +7,6 @@ const upload = require("../middleware/upload");
 const offerLetterUpload = require("../middleware/offerLetterUpload");
 const router = express.Router();
 const logActivity = require("./logactivity");
-const nodemailer = require("nodemailer");
 const fs = require('fs');
 const path = require('path');
 const { s3, getSignedUrl, deleteFile } = require('../config/s3Config');
@@ -56,15 +55,6 @@ async function sendCreateNotificationToMentor(recruiterId, candidateName, jobTit
 
     const mentor = recruiter.reporter;
 
-    // Create email transporter using recruiter's credentials
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: recruiter.email,
-        pass: recruiter.appPassword,
-      },
-    });
-
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
         <div style="background-color: #ffffff; padding: 30px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
@@ -86,14 +76,20 @@ async function sendCreateNotificationToMentor(recruiterId, candidateName, jobTit
     `;
 
     const mailOptions = {
+      fromName: recruiter.name || "Jobs Territory",
       from: recruiter.email,
       to: mentor.email,
       subject: `New Candidate Created: ${candidateName} by ${recruiter.name}`,
       html: htmlContent,
+      auth: {
+        user: recruiter.email,
+        pass: recruiter.appPassword,
+      },
     };
 
     console.log('📨 Sending email to mentor:', mentor.email);
-    await transporter.sendMail(mailOptions);
+    const result = await sendMail(mailOptions);
+    console.log('SMTP send result:', result);
     console.log(`✅ Email notification sent successfully to ${mentor.email}`);
   } catch (error) {
     console.error('❌ Error sending creation email notification:', error);
@@ -134,15 +130,6 @@ async function sendUpdateNotificationToReporter(updatingUserId, candidateName, j
       console.log('⚠️ Reporter has no app password configured');
       return;
     }
-
-    // Create email transporter
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: reporter.email,
-        pass: reporter.appPassword,
-      },
-    });
 
     // Build changes table
     let changesHtml = '';
@@ -192,14 +179,20 @@ async function sendUpdateNotificationToReporter(updatingUserId, candidateName, j
     `;
 
     const mailOptions = {
+      fromName: reporter.name || "Jobs Territory",
       from: reporter.email,
       to: reporter.email,
       subject: `Candidate Updated: ${candidateName} - ${jobTitle}`,
       html: htmlContent,
+      auth: {
+        user: reporter.email,
+        pass: reporter.appPassword,
+      },
     };
 
     console.log('📨 Sending email to:', reporter.email);
-    await transporter.sendMail(mailOptions);
+    const result = await sendMail(mailOptions);
+    console.log('SMTP send result:', result);
     console.log(`✅ Email notification sent successfully to ${reporter.email}`);
   } catch (error) {
     console.error('❌ Error sending email notification:', error);
