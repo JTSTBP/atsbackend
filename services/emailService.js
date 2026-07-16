@@ -44,7 +44,7 @@ const getDefaultEmailConfig = () => {
 const getFallbackModes = () => {
     const configuredModes = clean(process.env.SMTP_FALLBACK_MODES);
     if (configuredModes) {
-        return configuredModes.split(",").map((mode) => mode.trim()).filter(Boolean);
+        return [...new Set(configuredModes.split(",").map((mode) => mode.trim()).filter(Boolean))];
     }
 
     const primaryMode = clean(process.env.SMTP_TRANSPORT_MODE) || "direct-ipv4-587";
@@ -165,6 +165,7 @@ const getEmailDiagnostics = async () => {
         },
         dns: {},
         tcpTests: [],
+        controlTcpTests: [],
         fallbackModes: getFallbackModes(),
     };
 
@@ -195,6 +196,17 @@ const getEmailDiagnostics = async () => {
         diagnostics.tcpTests.push(await tcpConnectTest({ host: firstIpv4, port: 587, family: 4 }));
         diagnostics.tcpTests.push(await tcpConnectTest({ host: firstIpv4, port: 465, family: 4 }));
     }
+
+    diagnostics.controlTcpTests.push(await tcpConnectTest({ host: "www.google.com", port: 443, family: 4 }));
+    diagnostics.controlTcpTests.push(await tcpConnectTest({ host: "gmail.googleapis.com", port: 443, family: 4 }));
+
+    const smtpTcpReachable = diagnostics.tcpTests.some(test => test.ok);
+    const httpsTcpReachable = diagnostics.controlTcpTests.some(test => test.ok);
+    diagnostics.networkConclusion = smtpTcpReachable
+        ? "At least one Gmail SMTP TCP connection succeeded."
+        : httpsTcpReachable
+            ? "HTTPS outbound connectivity works, but Gmail SMTP ports 587/465 are unreachable from this deployment."
+            : "Both Gmail SMTP and HTTPS control connections failed from this deployment.";
 
     return diagnostics;
 };
