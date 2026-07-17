@@ -1,15 +1,36 @@
 const crypto = require("crypto");
 const dns = require("dns");
+const fs = require("fs");
 const net = require("net");
 const nodemailer = require("nodemailer");
 
-const EMAIL_SERVICE_VERSION = "gmail-smtp-fallback-v2-2026-07-16";
+const EMAIL_SERVICE_VERSION = "provider-email-v3-2026-07-17";
 
 if (typeof dns.setDefaultResultOrder === "function") {
     dns.setDefaultResultOrder("ipv4first");
 }
 
-const clean = (value) => (typeof value === "string" ? value.trim() : value);
+const clean = (value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    if (
+        (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+        (trimmed.startsWith("'") && trimmed.endsWith("'"))
+    ) {
+        return trimmed.slice(1, -1).trim();
+    }
+    return trimmed;
+};
+
+const isValidEmail = (value) => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(String(value || "").trim());
+
+const isValidNamedEmail = (value) => /^.+\s<[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+>$/.test(String(value || "").trim());
+
+const formatNamedEmail = (name, email) => {
+    const cleanName = clean(name) || "Jobs Territory";
+    const cleanEmail = clean(email);
+    return `"${String(cleanName).replace(/"/g, "")}" <${cleanEmail}>`;
+};
 
 const normalizePassword = (value) => {
     const password = clean(value);
@@ -38,6 +59,156 @@ const getDefaultEmailConfig = () => {
         connectionTimeout: getNumberEnv("SMTP_CONNECTION_TIMEOUT_MS", 8000),
         greetingTimeout: getNumberEnv("SMTP_GREETING_TIMEOUT_MS", 8000),
         socketTimeout: getNumberEnv("SMTP_SOCKET_TIMEOUT_MS", 15000),
+    };
+};
+
+const getEmailProvider = () => clean(process.env.EMAIL_PROVIDER || process.env.MAIL_PROVIDER || "smtp").toLowerCase();
+
+const assertValidEmailProvider = (traceId) => {
+    const provider = getEmailProvider();
+    if (!["resend", "smtp"].includes(provider)) {
+        const error = new Error(`Invalid email provider "${provider}". Use EMAIL_PROVIDER=resend or EMAIL_PROVIDER=smtp.`);
+        error.code = "INVALID_EMAIL_PROVIDER";
+        error.traceId = traceId;
+        throw error;
+    }
+    return provider;
+};
+
+const normalizeEmailList = (value) => {
+    if (!value) return undefined;
+    if (Array.isArray(value)) return value.filter(Boolean).map(item => String(item).trim()).filter(Boolean);
+    return String(value)
+        .split(",")
+        .map(item => item.trim())
+        .filter(Boolean);
+};
+
+const getResendFromAddress = ({ fromName, fallbackEmail }) => {
+    const configured = clean(process.env.RESEND_FROM_EMAIL || process.env.MAIL_FROM || process.env.SMTP_FROM);
+    if (configured) {
+        if (isValidNamedEmail(configured)) return configured;
+        if (isValidEmail(configured)) return formatNamedEmail(fromName, configured);
+        return configured;
+    }
+    const domain = clean(process.env.RESEND_FROM_DOMAIN);
+    if (domain) {
+        return formatNamedEmail(fromName, `noreply@${domain}`);
+    }
+    return isValidEmail(fallbackEmail) ? formatNamedEmail(fromName, fallbackEmail) : fallbackEmail;
+};
+
+const convertAttachmentsForResend = async (attachments = []) => {
+    if (!Array.isArray(attachments) || attachments.length === 0) return undefined;
+
+    const converted = [];
+    for (const attachment of attachments) {
+        if (!attachment) continue;
+        const filename = attachment.filename || attachment.name || "attachment";
+        let content = attachment.content;
+
+        if (!content && attachment.path) {
+            content = await fs.promises.readFile(attachment.path);
+        }
+
+        if (!content) continue;
+
+        converted.push({
+            filename,
+            content: Buffer.isBuffer(content)
+                ? content.toString("base64")
+                : Buffer.from(String(content)).toString("base64"),
+        });
+    }
+
+    return converted.length ? converted : undefined;
+};
+
+const sendMailWithResend = async ({ fromName, from, to, cc, bcc, replyTo, subject, text, html, attachments, traceId }) => {
+    const apiKey = clean(process.env.RESEND_API_KEY);
+    if (!apiKey) {
+        const error = new Error("Resend API key is not configured. Set RESEND_API_KEY.");
+        error.code = "RESEND_API_KEY_MISSING";
+        error.traceId = traceId;
+        throw error;
+    }
+
+    if (!clean(process.env.RESEND_FROM_EMAIL) && !clean(process.env.RESEND_FROM_DOMAIN) && !from) {
+        const error = new Error("Resend sender is not configured. Set RESEND_FROM_EMAIL.");
+        error.code = "RESEND_FROM_EMAIL_MISSING";
+        error.traceId = traceId;
+        throw error;
+    }
+
+    if (typeof fetch !== "function") {
+        const error = new Error("Global fetch is unavailable in this Node runtime. Use Node 18+ or add a fetch polyfill.");
+        error.code = "EMAIL_PROVIDER_NOT_CONFIGURED";
+        error.traceId = traceId;
+        throw error;
+    }
+
+    const resendFrom = getResendFromAddress({ fromName, fallbackEmail: from });
+    if (!isValidEmail(resendFrom) && !isValidNamedEmail(resendFrom)) {
+        const error = new Error("Invalid Resend sender. Set RESEND_FROM_EMAIL as email@example.com or Name <email@example.com>.");
+        error.code = "RESEND_FROM_EMAIL_INVALID";
+        error.traceId = traceId;
+        error.providerResponse = { from: resendFrom };
+        throw error;
+    }
+
+    const payload = {
+        from: resendFrom,
+        to: normalizeEmailList(to),
+        cc: normalizeEmailList(cc),
+        bcc: normalizeEmailList(bcc),
+        reply_to: replyTo || from,
+        subject,
+        html,
+        text,
+        attachments: await convertAttachmentsForResend(attachments),
+    };
+
+    Object.keys(payload).forEach((key) => {
+        if (payload[key] === undefined || payload[key] === "" || (Array.isArray(payload[key]) && payload[key].length === 0)) {
+            delete payload[key];
+        }
+    });
+
+    console.log(`[EMAIL ${traceId}] Sending via Resend HTTPS API`, {
+        from: payload.from,
+        replyTo: payload.reply_to,
+        toCount: payload.to?.length || 0,
+        ccCount: payload.cc?.length || 0,
+        hasAttachments: Boolean(payload.attachments?.length),
+    });
+
+    const startedAt = Date.now();
+    const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const error = new Error(data?.message || data?.error || `Resend API failed with status ${response.status}`);
+        error.code = response.status === 401 || response.status === 403 ? "EMAIL_PROVIDER_AUTH_FAILED" : "EMAIL_PROVIDER_SEND_FAILED";
+        error.traceId = traceId;
+        error.providerResponse = data;
+        throw error;
+    }
+
+    console.log(`[EMAIL ${traceId}] Resend send completed in ${Date.now() - startedAt}ms`, {
+        id: data?.id || null,
+    });
+
+    return {
+        traceId,
+        provider: "resend",
+        messageId: data?.id || null,
     };
 };
 
@@ -420,9 +591,26 @@ const sendMail = async ({ fromName = "Jobs Territory", from, to, cc, bcc, replyT
     const authUser = clean(auth?.user) || config.user;
     const authPass = normalizePassword(auth?.pass) || config.pass;
     const traceId = crypto.randomBytes(6).toString("hex");
+    const provider = assertValidEmailProvider(traceId);
 
     if (!to) {
         throw new Error("Email recipient is required.");
+    }
+
+    if (provider === "resend") {
+        return sendMailWithResend({
+            fromName,
+            from: senderEmail,
+            to,
+            cc,
+            bcc,
+            replyTo: replyTo || clean(process.env.SENDER_ID) || senderEmail,
+            subject,
+            text,
+            html,
+            attachments,
+            traceId,
+        });
     }
 
     if (!authUser || !authPass) {
@@ -512,12 +700,16 @@ const verifyEmailTransport = async (auth = {}) => {
     throw buildSmtpFailure({ traceId, attempts, lastError, diagnostics });
 };
 
+const sendMailWithConfiguredProvider = sendMail;
+
 const formatEmailErrorResponse = (error) => ({
     code: error.code || classifySmtpError(error),
     traceId: error.traceId,
     emailServiceVersion: error.emailServiceVersion || EMAIL_SERVICE_VERSION,
+    provider: getEmailProvider(),
     smtpAttempts: error.smtpAttempts,
     diagnostics: error.diagnostics,
+    providerResponse: error.providerResponse,
     message: error.message || "Email sending failed.",
 });
 
@@ -525,7 +717,9 @@ module.exports = {
     EMAIL_SERVICE_VERSION,
     createEmailTransporter,
     sendMail,
+    sendMailWithConfiguredProvider,
     verifyEmailTransport,
     getEmailDiagnostics,
+    getEmailProvider,
     formatEmailErrorResponse,
 };

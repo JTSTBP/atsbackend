@@ -640,6 +640,7 @@ router.post("/send-report-email", protect, async (req, res) => {
         await sendMail({
             fromName: "Jobs Territory Attendance",
             to: receiverEmail.trim(),
+            replyTo: req.user?.email,
             subject: subject || `Attendance Report - ${reportingPeriodStr}`,
             html: mainHtmlTemplate,
         });

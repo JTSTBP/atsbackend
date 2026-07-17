@@ -10,7 +10,7 @@ const logActivity = require("./logactivity");
 const fs = require('fs');
 const path = require('path');
 const { s3, getSignedUrl, deleteFile } = require('../config/s3Config');
-const { sendMail, formatEmailErrorResponse } = require('../services/emailService');
+const { sendMail, formatEmailErrorResponse, getEmailProvider } = require('../services/emailService');
 
 
 // Helper function to send email notification to mentor when a candidate is created
@@ -46,8 +46,8 @@ async function sendCreateNotificationToMentor(recruiterId, candidateName, jobTit
       return;
     }
 
-    // Check if recruiter has appPassword configured
-    if (!recruiter.appPassword) {
+    // SMTP needs the recruiter's app password; Resend uses the configured API key.
+    if (getEmailProvider() === "smtp" && !recruiter.appPassword) {
       console.log(`⚠️ Recruiter ${recruiter.name} has no app password configured. Please set it in profile to enable notifications.`);
       return;
     }
@@ -85,6 +85,7 @@ async function sendCreateNotificationToMentor(recruiterId, candidateName, jobTit
         user: recruiter.email,
         pass: recruiter.appPassword,
       },
+      replyTo: recruiter.email,
     };
 
     console.log('📨 Sending email to mentor:', mentor.email);
@@ -125,8 +126,8 @@ async function sendUpdateNotificationToReporter(updatingUserId, candidateName, j
 
     const reporter = updatingUser.reporter;
 
-    // Check if reporter has appPassword configured
-    if (!reporter.appPassword) {
+    // SMTP needs the reporter's app password; Resend uses the configured API key.
+    if (getEmailProvider() === "smtp" && !reporter.appPassword) {
       console.log('⚠️ Reporter has no app password configured');
       return;
     }
@@ -188,6 +189,7 @@ async function sendUpdateNotificationToReporter(updatingUserId, candidateName, j
         user: reporter.email,
         pass: reporter.appPassword,
       },
+      replyTo: updatingUser.email,
     };
 
     console.log('📨 Sending email to:', reporter.email);
@@ -1905,7 +1907,7 @@ router.delete("/:id/:role", async (req, res) => {
 router.post("/send-email", async (req, res) => {
   const { senderEmail, appPassword, recipientEmails, ccEmails, candidateIds } = req.body;
 
-  if (!senderEmail || !appPassword || !recipientEmails || !candidateIds || !Array.isArray(candidateIds) || candidateIds.length === 0) {
+  if (!senderEmail || (getEmailProvider() === "smtp" && !appPassword) || !recipientEmails || !candidateIds || !Array.isArray(candidateIds) || candidateIds.length === 0) {
     return res.status(400).json({ success: false, message: "Missing required fields or invalid candidate IDs" });
   }
 
@@ -2073,6 +2075,7 @@ router.post("/send-email", async (req, res) => {
       subject: subject,
       html: htmlContent,
       attachments: attachments,
+      replyTo: senderEmail,
       auth: {
         user: senderEmail,
         pass: appPassword,

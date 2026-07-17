@@ -388,7 +388,7 @@ router.delete('/:id', async (req, res) => {
 const { generateInvoicePDF } = require('../utils/pdfGenerator');
 const fs = require('fs');
 const path = require('path');
-const { sendMail, formatEmailErrorResponse } = require('../services/emailService');
+const { sendMail, formatEmailErrorResponse, getEmailProvider } = require('../services/emailService');
 
 // Send Invoice Email
 router.post('/send-email', async (req, res) => {
@@ -421,13 +421,13 @@ router.post('/send-email', async (req, res) => {
 
         await generateInvoicePDF(invoice, null, pdfPath);
 
-        const emailUser = senderEmail || process.env.SMTP_USER || process.env.EMAIL_ID || process.env.EMAIL_USER;
+        const emailUser = senderEmail || process.env.SMTP_USER || process.env.EMAIL_ID || process.env.EMAIL_USER || process.env.RESEND_FROM_EMAIL;
         const emailPass = senderPassword || process.env.SMTP_PASS || process.env.APP_PASSWORD || process.env.EMAIL_PASS;
 
         console.log("Sending email from:", emailUser);
         console.log("Sending email to:", clientEmail);
 
-        if (!emailUser || !emailPass) {
+        if (!emailUser || (getEmailProvider() === "smtp" && !emailPass)) {
             throw new Error("Email credentials missing. Please update your profile or check server config.");
         }
 
@@ -436,6 +436,7 @@ router.post('/send-email', async (req, res) => {
             from: emailUser,
             to: clientEmail,
             cc: cc,
+            replyTo: senderEmail || undefined,
             subject: `Invoice - ${invoice.client.companyName}`,
             text: emailBody || `Hi,\n\nKindly find the attached invoice soft copy.\n\nKarthika\nFinance\nM: 9686116232\nE: sarun@jobsterritory.com\nW: www.jobsterritory.com`,
             attachments: [
