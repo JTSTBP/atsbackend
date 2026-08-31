@@ -12,6 +12,24 @@ const path = require('path');
 const { s3, getSignedUrl, deleteFile } = require('../config/s3Config');
 const { sendMail, formatEmailErrorResponse, getEmailProvider } = require('../services/emailService');
 
+const getDateRangeMatch = (startDate, endDate, field = "createdAt") => {
+  if (!startDate && !endDate) return null;
+
+  const range = {};
+  if (startDate) {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    range.$gte = start;
+  }
+  if (endDate) {
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    range.$lte = end;
+  }
+
+  return { [field]: range };
+};
+
 
 // Helper function to send email notification to mentor when a candidate is created
 async function sendCreateNotificationToMentor(recruiterId, candidateName, jobTitle) {
@@ -243,90 +261,10 @@ router.get("/", async (req, res) => {
       ];
     }
 
-    // Aggregation Pipeline
-    const isStatusAll = !status || status === "all";
+    const createdAtDateMatch = getDateRangeMatch(startDate, endDate);
 
     const pipeline = [
-      // 1. Compute relevantTimestamp based on whether a specific status is selected
-      ...(startDate || endDate ? [
-        // Only add the $addFields + $match if date filtering is needed
-        ...(isStatusAll ? [
-          // Status = "all" → filter directly by createdAt
-          {
-            $match: {
-              createdAt: {
-                ...(startDate ? { $gte: new Date(startDate) } : {}),
-                ...(endDate ? { $lte: (() => { const d = new Date(endDate); d.setHours(23, 59, 59, 999); return d; })() } : {})
-              }
-            }
-          }
-        ] : [
-          // Specific status selected → compute relevantTimestamp from statusHistory
-          {
-            $addFields: {
-              relevantTimestamp: {
-                $switch: {
-                  branches: [
-                    {
-                      case: {
-                        $and: [
-                          { $eq: [status, "Selected"] },
-                          { $ne: ["$selectionDate", null] }
-                        ]
-                      },
-                      then: "$selectionDate"
-                    },
-                    {
-                      case: {
-                        $and: [
-                          { $eq: [status, "Joined"] },
-                          { $ne: ["$joiningDate", null] }
-                        ]
-                      },
-                      then: "$joiningDate"
-                    }
-                  ],
-                  default: {
-                    $let: {
-                      vars: {
-                        historyMatch: {
-                          $arrayElemAt: [
-                            {
-                              $filter: {
-                                input: { $ifNull: ["$statusHistory", []] },
-                                as: "h",
-                                cond: (["Shortlisted", "Screen", "Screened"].includes(status))
-                                  ? { $in: ["$$h.status", ["Shortlisted", "Screen", "Screened"]] }
-                                  : { $eq: ["$$h.status", status] }
-                              }
-                            },
-                            -1
-                          ]
-                        }
-                      },
-                      in: {
-                        $cond: [
-                          { $not: ["$$historyMatch"] },
-                          "$createdAt",
-                          "$$historyMatch.timestamp"
-                        ]
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            $match: {
-              relevantTimestamp: {
-                ...(startDate ? { $gte: new Date(startDate) } : {}),
-                ...(endDate ? { $lte: (() => { const d = new Date(endDate); d.setHours(23, 59, 59, 999); return d; })() } : {})
-              }
-            }
-          }
-        ])
-      ] : []),
+      ...(createdAtDateMatch ? [{ $match: createdAtDateMatch }] : []),
 
       // 3. Filter by Joined/Selected specific ranges if provided
       ...(joinStartDate || joinEndDate ? [{
@@ -761,90 +699,15 @@ router.get("/role-based-candidates", async (req, res) => {
     const limitNum = parseInt(limit) || 10;
     const skip = (pageNum - 1) * limitNum;
 
+    const createdAtDateMatch = getDateRangeMatch(startDate, endDate);
+
     // Aggregation Pipeline
     const pipeline = [
       // 1. Initial Match (Visibility, Status, Stage, Search on Dynamic Fields)
       { $match: matchStage },
 
-      // 1b. Context-aware date filtering
-      ...(startDate || endDate ? [
-        ...(!status || status === "all" ? [
-          // Status = "all" → filter directly by createdAt
-          {
-            $match: {
-              createdAt: {
-                ...(startDate ? { $gte: new Date(startDate) } : {}),
-                ...(endDate ? { $lte: (() => { const d = new Date(endDate); d.setHours(23, 59, 59, 999); return d; })() } : {})
-              }
-            }
-          }
-        ] : [
-          // Specific status selected → compute relevantTimestamp from statusHistory
-          {
-            $addFields: {
-              relevantTimestamp: {
-                $switch: {
-                  branches: [
-                    {
-                      case: {
-                        $and: [
-                          { $eq: [status, "Selected"] },
-                          { $ne: ["$selectionDate", null] }
-                        ]
-                      },
-                      then: "$selectionDate"
-                    },
-                    {
-                      case: {
-                        $and: [
-                          { $eq: [status, "Joined"] },
-                          { $ne: ["$joiningDate", null] }
-                        ]
-                      },
-                      then: "$joiningDate"
-                    }
-                  ],
-                  default: {
-                    $let: {
-                      vars: {
-                        historyMatch: {
-                          $arrayElemAt: [
-                            {
-                              $filter: {
-                                input: { $ifNull: ["$statusHistory", []] },
-                                as: "h",
-                                cond: (["Shortlisted", "Screen", "Screened"].includes(status))
-                                  ? { $in: ["$$h.status", ["Shortlisted", "Screen", "Screened"]] }
-                                  : { $eq: ["$$h.status", status] }
-                              }
-                            },
-                            -1
-                          ]
-                        }
-                      },
-                      in: {
-                        $cond: [
-                          { $not: ["$$historyMatch"] },
-                          "$createdAt",
-                          "$$historyMatch.timestamp"
-                        ]
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            $match: {
-              relevantTimestamp: {
-                ...(startDate ? { $gte: new Date(startDate) } : {}),
-                ...(endDate ? { $lte: (() => { const d = new Date(endDate); d.setHours(23, 59, 59, 999); return d; })() } : {})
-              }
-            }
-          }
-        ])
-      ] : []),
+      // 1b. From/To Date always filter the candidate Created Date column.
+      ...(createdAtDateMatch ? [{ $match: createdAtDateMatch }] : []),
 
       // 1d. Filter by Joined/Selected specific ranges if provided
       ...(joinStartDate || joinEndDate ? [{
@@ -1084,71 +947,13 @@ router.get("/user/:userId", async (req, res) => {
     const pageNum = parseInt(page) || 1;
     const limitNum = parseInt(limit) || 10;
     const skip = (pageNum - 1) * limitNum;
+    const createdAtDateMatch = getDateRangeMatch(startDate, endDate);
 
-    // Define the date match based on status history logic
     const pipeline = [
       { $match: { createdBy: new mongoose.Types.ObjectId(userId) } },
 
-      // Calculate relevantTimestamp
-      {
-        $addFields: {
-          relevantTimestamp: {
-            $let: {
-              vars: {
-                historyMatch: {
-                  $arrayElemAt: [
-                    {
-                      $filter: {
-                        input: { $ifNull: ["$statusHistory", []] },
-                        as: "h",
-                        cond: {
-                          $cond: [
-                            { $or: [{ $not: [status] }, { $eq: [status, "all"] }] },
-                            { $eq: ["$$h.status", "$status"] },
-                            {
-                              $cond: [
-                                { $in: [status, ["Shortlisted", "Screen", "Screened"]] },
-                                { $in: ["$$h.status", ["Shortlisted", "Screen", "Screened"]] },
-                                { $eq: ["$$h.status", status] }
-                              ]
-                            }
-                          ]
-                        }
-                      }
-                    },
-                    -1
-                  ]
-                }
-              },
-              in: {
-                $cond: [
-                  { $not: ["$$historyMatch"] },
-                  {
-                    $switch: {
-                      branches: [
-                        { case: { $eq: ["$status", "Joined"] }, then: "$joiningDate" },
-                        { case: { $eq: ["$status", "Selected"] }, then: "$selectionDate" }
-                      ],
-                      default: "$createdAt"
-                    }
-                  },
-                  "$$historyMatch.timestamp"
-                ]
-              }
-            }
-          }
-        }
-      },
-
-      // Filter by relevantTimestamp
-      ...(startDate || endDate ? [{
-        $match: {
-          relevantTimestamp: {
-            ...(startDate ? { $gte: new Date(startDate) } : {}),
-            ...(endDate ? { $lte: (() => { const d = new Date(endDate); d.setHours(23, 59, 59, 999); return d; })() } : {})
-          }
-        }
-      }] : []),
+      // From/To Date always filter the candidate Created Date column.
+      ...(createdAtDateMatch ? [{ $match: createdAtDateMatch }] : []),
 
       // Filter by Joined/Selected specific ranges if provided
       ...(joinStartDate || joinEndDate ? [{
