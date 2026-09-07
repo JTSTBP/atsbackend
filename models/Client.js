@@ -7,8 +7,8 @@ const billingDetailSchema = new mongoose.Schema({
 });
 
 const pocSchema = new mongoose.Schema({
-    name: { type: String, required: true },
-    email: { type: String, required: true },
+    name: { type: String },
+    email: { type: String },
     phone: { type: String },
     altPhone: { type: String },
     linkedinUrl: { type: String }
@@ -17,11 +17,11 @@ const pocSchema = new mongoose.Schema({
 const clientSchema = new mongoose.Schema(
     {
         companyName: { type: String, required: true, unique: true },
-        websiteUrl: { type: String, required: true, unique: true },
+        websiteUrl: { type: String, unique: true, sparse: true },
         industry: { type: String },
         linkedinUrl: { type: String },
         companyInfo: { type: String },
-        logo: { type: String, required: true }, // Profile picture/logo path
+        logo: { type: String }, // Profile picture/logo path
         address: { type: String },
         state: { type: String },
         agreementPercentage: { type: Number },

@@ -55,9 +55,10 @@ const normalizeHeader = (value) => String(value || "").trim().toLowerCase().repl
 
 const getCellValue = (row, columnIndex) => String(row[columnIndex] ?? "").trim();
 
-const generateStatementFingerprint = ({ accountNumber, transactionType, amount, reason }) => {
+const generateStatementFingerprint = ({ accountNumber, date, transactionType, amount, reason }) => {
     return [
         String(accountNumber || "").trim(),
+        String(date || "").trim(),
         String(transactionType || "").trim().toLowerCase(),
         Number(amount).toFixed(2),
         String(reason || "").trim().toLowerCase(),
@@ -108,6 +109,7 @@ const validateStatementRows = (sheetRows, bulkUploadId) => {
     const headers = sheetRows[0].map(normalizeHeader);
     const columnIndexes = {
         accountNumber: headers.indexOf("account number"),
+        date: headers.indexOf("date"),
         type: headers.indexOf("type"),
         amount: headers.indexOf("amount"),
         reason: headers.indexOf("reason"),
@@ -147,6 +149,7 @@ const validateStatementRows = (sheetRows, bulkUploadId) => {
         }
 
         const accountNumber = getCellValue(row, columnIndexes.accountNumber);
+        const dateValue = getCellValue(row, columnIndexes.date);
         const type = normalizeType(getCellValue(row, columnIndexes.type));
         const amountResult = parseAmount(getCellValue(row, columnIndexes.amount));
         const reason = getCellValue(row, columnIndexes.reason);
@@ -154,6 +157,16 @@ const validateStatementRows = (sheetRows, bulkUploadId) => {
 
         if (!accountNumber) {
             errors.push("Account Number is required.");
+        }
+
+        let parsedDate = null;
+        if (!dateValue) {
+            errors.push("Date is required.");
+        } else {
+            parsedDate = new Date(dateValue);
+            if (isNaN(parsedDate.getTime())) {
+                errors.push("Invalid Date format.");
+            }
         }
 
         if (!type) {
@@ -181,10 +194,11 @@ const validateStatementRows = (sheetRows, bulkUploadId) => {
         validRows.push({
             row: excelRowNumber,
             accountNumber,
+            date: parsedDate,
             transactionType: type,
             amount: amountResult.value,
             reason,
-            fingerprint: generateStatementFingerprint({ accountNumber, transactionType: type, amount: amountResult.value, reason }),
+            fingerprint: generateStatementFingerprint({ accountNumber, date: parsedDate.toISOString(), transactionType: type, amount: amountResult.value, reason }),
             bulkUploadId,
         });
     });
@@ -273,6 +287,7 @@ router.post("/upload", protect, (req, res) => {
                     duplicateRows.push({
                     row: row.row,
                     accountNumber: row.accountNumber,
+                    date: row.date,
                     transactionType: row.transactionType,
                     amount: row.amount,
                     reason: row.reason,
@@ -289,6 +304,7 @@ router.post("/upload", protect, (req, res) => {
 
             const statementDocs = rowsToSave.map((row) => ({
                 accountNumber: row.accountNumber,
+                date: row.date,
                 transactionType: row.transactionType,
                 amount: row.amount,
                 reason: row.reason,
@@ -450,6 +466,7 @@ router.get("/", protect, async (req, res) => {
                 _id: statement._id,
                 bulkUploadId: statement.bulkUploadId,
                 accountNumber: maskAccountNumber(statement.accountNumber),
+                date: statement.date,
                 transactionType: statement.transactionType,
                 amount: statement.amount,
                 reason: statement.reason,
@@ -571,6 +588,7 @@ router.get("/batches/:bulkUploadId", protect, async (req, res) => {
                 _id: statement._id,
                 bulkUploadId: statement.bulkUploadId,
                 accountNumber: maskAccountNumber(statement.accountNumber),
+                date: statement.date,
                 transactionType: statement.transactionType,
                 amount: statement.amount,
                 reason: statement.reason,
@@ -582,6 +600,7 @@ router.get("/batches/:bulkUploadId", protect, async (req, res) => {
             duplicateRows: (batch.duplicateRows || []).map((row) => ({
                 row: row.row,
                 accountNumber: maskAccountNumber(row.accountNumber),
+                date: row.date,
                 transactionType: row.transactionType,
                 amount: row.amount,
                 reason: row.reason,
@@ -594,6 +613,65 @@ router.get("/batches/:bulkUploadId", protect, async (req, res) => {
             success: false,
             message: "Failed to fetch upload batch details.",
         });
+    }
+});
+
+router.put("/:id", protect, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { accountNumber, date, transactionType, amount, reason } = req.body;
+
+        const statement = await Statement.findById(id);
+        if (!statement) {
+            return res.status(404).json({ success: false, message: "Statement not found." });
+        }
+
+        const newFingerprint = [
+            String(accountNumber || statement.accountNumber || "").trim(),
+            String(date || statement.date || "").trim(),
+            String(transactionType || statement.transactionType || "").trim().toLowerCase(),
+            Number(amount !== undefined ? amount : statement.amount).toFixed(2),
+            String(reason || statement.reason || "").trim().toLowerCase(),
+        ].join("|");
+
+        if (newFingerprint !== statement.fingerprint) {
+            const existing = await Statement.findOne({ fingerprint: newFingerprint });
+            if (existing && String(existing._id) !== String(id)) {
+                return res.status(400).json({ success: false, message: "A statement with these exact details already exists." });
+            }
+        }
+
+        if (accountNumber !== undefined) statement.accountNumber = accountNumber;
+        if (date !== undefined) statement.date = date;
+        if (transactionType !== undefined) statement.transactionType = transactionType;
+        if (amount !== undefined) statement.amount = amount;
+        if (reason !== undefined) statement.reason = reason;
+        statement.fingerprint = newFingerprint;
+
+        await statement.save();
+
+        return res.status(200).json({ success: true, message: "Statement updated successfully.", data: statement });
+    } catch (error) {
+        console.error("Error updating statement:", error);
+        return res.status(500).json({ success: false, message: "Failed to update statement." });
+    }
+});
+
+router.delete("/:id", protect, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const statement = await Statement.findByIdAndDelete(id);
+        if (!statement) {
+            return res.status(404).json({ success: false, message: "Statement not found." });
+        }
+
+        // Optional: Update the batch totals if necessary, though it might be complex and typically bulk batches are historical records.
+        // We will just delete the statement.
+
+        return res.status(200).json({ success: true, message: "Statement deleted successfully." });
+    } catch (error) {
+        console.error("Error deleting statement:", error);
+        return res.status(500).json({ success: false, message: "Failed to delete statement." });
     }
 });
 

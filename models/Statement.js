@@ -7,6 +7,10 @@ const statementSchema = new mongoose.Schema(
             required: true,
             trim: true,
         },
+        date: {
+            type: Date,
+            required: true,
+        },
         transactionType: {
             type: String,
             enum: ["debited", "credited"],

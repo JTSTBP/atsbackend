@@ -54,6 +54,7 @@ const statementUploadBatchSchema = new mongoose.Schema(
             {
                 row: Number,
                 accountNumber: String,
+                date: Date,
                 transactionType: String,
                 amount: Number,
                 reason: String,
