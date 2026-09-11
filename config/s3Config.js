@@ -40,6 +40,7 @@ let resumeStorage = null;
 let offerLetterStorage = null;
 let profilePhotoStorage = null;
 let clientLogoStorage = null;
+let jobDescriptionStorage = null;
 
 if (hasCredentials) {
     // Configure S3 client (works for both AWS and R2)
@@ -110,6 +111,17 @@ if (hasCredentials) {
         }
     });
 
+    // S3/R2 Storage for Job Descriptions
+    jobDescriptionStorage = multerS3({
+        s3: s3,
+        bucket: bucketName,
+        contentType: multerS3.AUTO_CONTENT_TYPE,
+        key: function (req, file, cb) {
+            const fileName = `job-descriptions/jd-${Date.now()}-${file.originalname.replace(/\s+/g, '_')}`;
+            cb(null, fileName);
+        }
+    });
+
     console.log(`✅ ${hasR2Credentials ? 'Cloudflare R2' : 'AWS S3'} configured successfully`);
 } else {
     // Fallback to local storage
@@ -162,6 +174,19 @@ if (hasCredentials) {
         },
         filename: (req, file, cb) => {
             cb(null, `logo-${Date.now()}-${file.originalname.replace(/\s+/g, '_')}`);
+        }
+    });
+
+    jobDescriptionStorage = multer.diskStorage({
+        destination: (req, file, cb) => {
+            const dir = "uploads/job-descriptions/";
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+            cb(null, dir);
+        },
+        filename: (req, file, cb) => {
+            cb(null, `jd-${Date.now()}-${file.originalname.replace(/\s+/g, '_')}`);
         }
     });
 }
@@ -316,7 +341,7 @@ const getSignedUrl = (fileUrl) => {
 
     // Handle local-looking paths that have been migrated to cloud storage
     if (!isCloudUrl && hasCredentials && fileUrl && !fileUrl.startsWith('http')) {
-        const knownPrefixes = ['logos/', 'photos/', 'resumes/', 'offers/', 'uploads/'];
+        const knownPrefixes = ['logos/', 'photos/', 'resumes/', 'offers/', 'job-descriptions/', 'uploads/'];
         if (knownPrefixes.some(prefix => fileUrl.startsWith(prefix))) {
             try {
                 const bucket = hasR2Credentials ? process.env.R2_BUCKET_NAME : process.env.AWS_S3_BUCKET_NAME;
@@ -364,6 +389,7 @@ module.exports = {
     offerLetterStorage,
     profilePhotoStorage,
     clientLogoStorage,
+    jobDescriptionStorage,
     hasAWSCredentials,
     hasR2Credentials,
     hasCredentials,

@@ -2,36 +2,56 @@ const express = require("express");
 const Job = require("../models/Jobs");
 const logActivity = require("./logactivity");
 const Client = require("../models/Client");
-const { getSignedUrl } = require("../config/s3Config");
+const { getSignedUrl, deleteFile } = require("../config/s3Config");
+const jobDescriptionUpload = require("../middleware/jobDescriptionUpload");
 
 const router = express.Router();
 
 // ➕ Create a new job
-router.post("/", async (req, res) => {
+router.post("/", jobDescriptionUpload.single("jdFile"), async (req, res) => {
   try {
-    const jobData = { ...req.body };
+    let jobData = {};
+    if (req.body.jobData) {
+      try {
+        jobData = typeof req.body.jobData === "string" ? JSON.parse(req.body.jobData) : req.body.jobData;
+      } catch (e) {
+        jobData = { ...req.body };
+      }
+    } else {
+      jobData = { ...req.body };
+    }
     delete jobData._id; // <-- remove _id if sent accidentally
+
+    if (req.file) {
+      jobData.jdFile = req.file.location || req.file.path;
+      jobData.jdFileName = req.file.originalname;
+    }
 
     const newJob = new Job(jobData);
     await newJob.save();
 
     // Increment client's job count if clientId is provided
     if (newJob.clientId) {
-
       await Client.findByIdAndUpdate(newJob.clientId, {
         $inc: { jobCount: 1 }
       });
     }
 
     logActivity(
-      req.body.CreatedBy, // userId
+      jobData.CreatedBy, // userId
       "created", // action
       "job", // module
       `Created job ${newJob.title}`, // description
       newJob._id, // targetId
       "Job" // targetModel
     );
-    res.status(201).json({ success: true, job: newJob });
+
+    const jobObj = newJob.toObject();
+    if (jobObj.jdFile) {
+      jobObj.jdFile = getSignedUrl(jobObj.jdFile);
+    }
+
+    res.status(201).json({ success: true, job: jobObj });
   } catch (error) {
     console.error("Error creating job:", error);
     res.status(500).json({
@@ -64,6 +84,9 @@ router.get("/", async (req, res) => {
         const jobObj = job.toObject();
         if (jobObj.clientId && jobObj.clientId.logo) {
           jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
+        }
+        if (jobObj.jdFile) {
+          jobObj.jdFile = getSignedUrl(jobObj.jdFile);
         }
         return jobObj;
       });
@@ -210,6 +233,9 @@ router.get("/", async (req, res) => {
       if (jobObj.clientId && jobObj.clientId.logo) {
         jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
       }
+      if (jobObj.jdFile) {
+        jobObj.jdFile = getSignedUrl(jobObj.jdFile);
+      }
       
       return jobObj;
     });
@@ -252,6 +278,9 @@ router.get("/createdby/:userId", async (req, res) => {
       const jobObj = job.toObject();
       if (jobObj.clientId && jobObj.clientId.logo) {
         jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
+      }
+      if (jobObj.jdFile) {
+        jobObj.jdFile = getSignedUrl(jobObj.jdFile);
       }
       return jobObj;
     });
@@ -323,6 +352,9 @@ router.get("/assigned/:recruiterId", async (req, res) => {
         if (jobObj.clientId && jobObj.clientId.logo) {
           jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
         }
+        if (jobObj.jdFile) {
+          jobObj.jdFile = getSignedUrl(jobObj.jdFile);
+        }
         return jobObj;
       });
       return res.json({ success: true, jobs: jobsWithSignedLogos });
@@ -348,6 +380,9 @@ router.get("/assigned/:recruiterId", async (req, res) => {
       const jobObj = job.toObject();
       if (jobObj.clientId && jobObj.clientId.logo) {
         jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
+      }
+      if (jobObj.jdFile) {
+        jobObj.jdFile = getSignedUrl(jobObj.jdFile);
       }
       return jobObj;
     });
@@ -385,6 +420,9 @@ router.get("/:id", async (req, res) => {
     if (jobObj.clientId && jobObj.clientId.logo) {
       jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
     }
+    if (jobObj.jdFile) {
+      jobObj.jdFile = getSignedUrl(jobObj.jdFile);
+    }
 
     res.json({ success: true, job: jobObj });
   } catch (error) {
@@ -393,15 +431,39 @@ router.get("/:id", async (req, res) => {
 });
 
 // ✏️ Update a job
-router.put("/:id", async (req, res) => {
+router.put("/:id", jobDescriptionUpload.single("jdFile"), async (req, res) => {
   try {
-    console.log(req.body, "uuu");
+    let updateData = {};
+    if (req.body.jobData) {
+      try {
+        updateData = typeof req.body.jobData === "string" ? JSON.parse(req.body.jobData) : req.body.jobData;
+      } catch (e) {
+        updateData = { ...req.body };
+      }
+    } else {
+      updateData = { ...req.body };
+    }
+
     const oldJob = await Job.findById(req.params.id);
     if (!oldJob) {
       return res.status(404).json({ success: false, message: "Job not found" });
     }
 
-    const updatedJob = await Job.findByIdAndUpdate(req.params.id, req.body, {
+    if (req.file) {
+      if (oldJob.jdFile) {
+        await deleteFile(oldJob.jdFile);
+      }
+      updateData.jdFile = req.file.location || req.file.path;
+      updateData.jdFileName = req.file.originalname;
+    } else if (req.body.removeJdFile === "true" || updateData.removeJdFile) {
+      if (oldJob.jdFile) {
+        await deleteFile(oldJob.jdFile);
+      }
+      updateData.jdFile = null;
+      updateData.jdFileName = null;
+    }
+
+    const updatedJob = await Job.findByIdAndUpdate(req.params.id, updateData, {
       new: true,
     })
       .populate("assignedRecruiters", "name email")
@@ -411,7 +473,7 @@ router.put("/:id", async (req, res) => {
       .populate("clientId", "companyName websiteUrl industry linkedinUrl companyInfo pocs logo");
 
     // Handle Client Job Count Update
-    if (req.body.clientId && req.body.clientId !== (oldJob.clientId?.toString())) {
+    if (updateData.clientId && updateData.clientId !== (oldJob.clientId?.toString())) {
       // Decrement count for old client
       if (oldJob.clientId) {
         await Client.findByIdAndUpdate(oldJob.clientId, {
@@ -419,26 +481,31 @@ router.put("/:id", async (req, res) => {
         });
       }
       // Increment count for new client
-      await Client.findByIdAndUpdate(req.body.clientId, {
+      await Client.findByIdAndUpdate(updateData.clientId, {
         $inc: { jobCount: 1 }
       });
-    } else if (req.body.clientId === "" && oldJob.clientId) {
+    } else if (updateData.clientId === "" && oldJob.clientId) {
       // If client is removed
       await Client.findByIdAndUpdate(oldJob.clientId, {
         $inc: { jobCount: -1 }
       });
     }
+
     logActivity(
-      req.body.UpdatedBy, // userId (you must send updatedBy from frontend)
+      updateData.UpdatedBy, // userId (you must send updatedBy from frontend)
       "updated", // action
       "job", // module
       `Updated job ${updatedJob.title}`, // description
       updatedJob._id, // targetId
       "Job" // targetModel
     );
+
     const jobObj = updatedJob.toObject();
     if (jobObj.clientId && jobObj.clientId.logo) {
       jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
+    }
+    if (jobObj.jdFile) {
+      jobObj.jdFile = getSignedUrl(jobObj.jdFile);
     }
     
     res.json({ success: true, job: jobObj });
@@ -451,6 +518,10 @@ router.put("/:id", async (req, res) => {
 // ❌ Delete a job
 router.delete("/:id/:role", async (req, res) => {
   try {
+    const jobToDelete = await Job.findById(req.params.id);
+    if (jobToDelete && jobToDelete.jdFile) {
+      await deleteFile(jobToDelete.jdFile);
+    }
     await Job.findByIdAndDelete(req.params.id);
     logActivity(
       req.params.role, // userId (role param actually contains userId)

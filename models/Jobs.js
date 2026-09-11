@@ -57,6 +57,8 @@ const jobSchema = new mongoose.Schema(
     leadRecruiter: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
 
     candidateFields: [candidateFieldSchema],
+    jdFile: { type: String }, // Path or URL to the uploaded Job Description document
+    jdFileName: { type: String }, // Original file name of the Job Description document
   },
   { timestamps: true }
 );
