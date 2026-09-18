@@ -88,7 +88,19 @@ router.post('/', clientUpload.single('logo'), async (req, res) => {
 });
 
 // Get all clients
+// 🚀 Lightweight dropdown endpoint — returns only _id & companyName (fast, no populate)
+router.get('/dropdown', async (req, res) => {
+    try {
+        const clients = await Client.find({}, '_id companyName').sort({ companyName: 1 }).lean();
+        return res.json({ success: true, clients });
+    } catch (err) {
+        console.error('Error fetching clients for dropdown:', err);
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
 // 📋 Get all clients with Pagination & Search
+
 router.get('/', async (req, res) => {
     try {
         const { page, limit, search } = req.query;
