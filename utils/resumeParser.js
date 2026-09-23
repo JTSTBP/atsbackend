@@ -1,362 +1,463 @@
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
+const path = require("path");
 
-// Common technical skills to scan for
 const COMMON_SKILLS = [
-  "React", "Angular", "Vue", "Node.js", "Node", "Express", "JavaScript", "JS",
-  "TypeScript", "TS", "Python", "Java", "SQL", "MongoDB", "PostgreSQL", "HTML",
-  "CSS", "AWS", "Docker", "Kubernetes", "Git", "C++", "C#", "PHP", "Ruby",
-  "Swift", "Kotlin", "Flutter", "React Native", "Machine Learning", "ML", "AI",
-  "Data Science", "Figma", "UI/UX", "Redux", "GraphQL", "Next.js", "Django",
-  "Spring Boot", "Hibernate", "Microservices", "REST API", "CI/CD", "Jenkins"
+  "React", "Angular", "Vue", "Node.js", "Express", "JavaScript", "TypeScript",
+  "Python", "Java", "SQL", "MySQL", "MongoDB", "PostgreSQL", "SQLite", "Redis",
+  "HTML", "CSS", "SCSS", "SASS", "Bootstrap", "Tailwind",
+  "AWS", "Azure", "GCP", "Docker", "Kubernetes", "Terraform",
+  "Git", "GitHub", "GitLab", "Bitbucket",
+  "C++", "C#", "PHP", "Ruby", "Go", "Golang", "Rust", "Scala", "Kotlin",
+  "Swift", "Flutter", "React Native", "Ionic",
+  "Machine Learning", "Deep Learning", "AI", "Data Science", "NLP",
+  "Figma", "Adobe XD", "UI/UX", "Sketch",
+  "Redux", "GraphQL", "REST API", "gRPC", "WebSocket",
+  "Next.js", "Nuxt.js", "Django", "Flask", "FastAPI", "Spring Boot",
+  "Hibernate", "Microservices", "CI/CD", "Jenkins", "GitHub Actions",
+  "Linux", "Bash", "Shell", "PowerShell",
+  "Selenium", "Cypress", "Jest", "Mocha", "JUnit", "Pytest",
+  "Excel", "Power BI", "Tableau", "Jira", "Confluence",
+  "Pandas", "NumPy", "TensorFlow", "PyTorch", "Scikit-learn", "OpenCV"
 ];
 
-// Common design designations to scan for
 const COMMON_DESIGNATIONS = [
-  "Software Engineer", "Frontend Developer", "Backend Developer", "Full Stack Developer",
-  "Software Developer", "Web Developer", "Mobile Developer", "Android Developer",
-  "iOS Developer", "DevOps Engineer", "System Administrator", "Database Administrator",
+  "Software Engineer", "Senior Software Engineer", "Lead Software Engineer",
+  "Frontend Developer", "Backend Developer", "Full Stack Developer",
+  "Software Developer", "Web Developer", "Mobile Developer",
+  "Android Developer", "iOS Developer",
+  "DevOps Engineer", "Site Reliability Engineer",
+  "System Administrator", "Database Administrator",
   "QA Engineer", "Quality Analyst", "Automation Engineer", "Test Engineer",
-  "Product Manager", "Project Manager", "Scrum Master", "Business Analyst",
-  "UI/UX Designer", "Product Designer", "Graphic Designer", "Data Scientist",
-  "Data Analyst", "Machine Learning Engineer", "Solutions Architect", "Technical Lead"
+  "Product Manager", "Project Manager", "Scrum Master",
+  "Business Analyst", "Technical Lead", "Tech Lead", "Team Lead",
+  "Solutions Architect", "Cloud Architect",
+  "UI/UX Designer", "Product Designer", "Graphic Designer",
+  "Data Scientist", "Data Analyst", "Data Engineer",
+  "Machine Learning Engineer", "AI Engineer",
+  "Network Engineer", "Security Engineer",
+  "React Developer", "Angular Developer", "Node Developer",
+  "Java Developer", "Python Developer", "PHP Developer"
 ];
 
-// Major cities (primarily Indian + international tech hubs) to scan for location
 const COMMON_CITIES = [
-  "Mumbai", "Pune", "Bengaluru", "Bangalore", "Hyderabad", "Chennai", "Delhi",
-  "Noida", "Gurgaon", "Gurugram", "Kolkata", "Ahmedabad", "Jaipur", "Chandigarh",
-  "Indore", "Kochi", "Coimbatore", "San Francisco", "New York", "London",
-  "Singapore", "Dubai", "Austin", "Seattle"
+  "Mumbai", "Pune", "Bengaluru", "Bangalore", "Hyderabad", "Chennai",
+  "Delhi", "New Delhi", "Noida", "Gurgaon", "Gurugram", "Faridabad",
+  "Kolkata", "Ahmedabad", "Jaipur", "Chandigarh", "Indore", "Bhopal",
+  "Lucknow", "Nagpur", "Kochi", "Coimbatore", "Thiruvananthapuram",
+  "Surat", "Vadodara", "Visakhapatnam", "Patna", "Bhubaneswar",
+  "San Francisco", "New York", "London", "Singapore", "Dubai", "Austin", "Seattle"
 ];
 
-// Degrees to scan for education
 const DEGREES = [
-  "B.Tech", "B.E.", "M.Tech", "M.E.", "MCA", "BCA", "MBA", "B.Sc", "M.Sc",
-  "B.Com", "M.Com", "Ph.D", "Bachelor of Technology", "Bachelor of Engineering",
+  "B.Tech", "B.E", "M.Tech", "M.E", "MCA", "BCA", "MBA", "BBA",
+  "B.Sc", "M.Sc", "BSc", "MSc", "B.Com", "M.Com", "BCom", "MCom",
+  "Ph.D", "PhD", "Bachelor of Technology", "Bachelor of Engineering",
+  "Master of Technology", "Master of Engineering",
   "Master of Computer Applications", "Bachelor of Computer Applications",
-  "Master of Business Administration", "Bachelor of Science", "Master of Science"
+  "Master of Business Administration", "Bachelor of Business Administration",
+  "Bachelor of Science", "Master of Science"
 ];
 
-/**
- * Extracts raw text from a PDF or DOCX file buffer.
- * @param {Buffer} buffer - File buffer
- * @param {string} mimeType - File mime type or extension
- * @returns {Promise<string>} Extracted text
- */
-async function extractTextFromBuffer(buffer, mimeType) {
-  console.log("extractTextFromBuffer called. MIME:", mimeType, "buffer size:", buffer.length);
-  const isPdf = mimeType === "application/pdf" || mimeType === "pdf";
+function isPdfMime(mimeType) {
+  if (!mimeType) return false;
+  const m = mimeType.toLowerCase();
+  return m === "application/pdf" || m === "pdf";
+}
 
-  if (isPdf) {
+function isDocxMime(mimeType) {
+  if (!mimeType) return false;
+  const m = mimeType.toLowerCase();
+  return (
+    m === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    m === "docx" ||
+    m === "application/msword" ||
+    m === "doc"
+  );
+}
+
+async function extractTextFromBuffer(buffer, mimeType) {
+  // Ensure we always work with a proper Buffer
+  if (buffer && !(buffer instanceof Buffer)) {
+    buffer = Buffer.from(buffer);
+  }
+
+  // Auto-detect from extension if mimeType is missing
+  if (!mimeType || mimeType === "application/octet-stream") {
+    console.warn("No useful mimeType, falling back to extension from URL");
+  }
+
+  console.log("extractTextFromBuffer called. MIME:", mimeType, "buffer size:", buffer ? buffer.length : 0);
+
+  if (isPdfMime(mimeType)) {
+    // Primary: pdf-parse (fast, handles most PDFs)
     try {
       const data = await pdfParse(buffer);
-      const textLength = data.text ? data.text.length : 0;
-      console.log("PDF parsing succeeded. Text length:", textLength);
-      console.log("PDF text snippet:", data.text ? data.text.substring(0, 200) : "");
-      if (textLength > 50) {
-        return data.text || "";
-      }
-      // Fallback to pdfjs if extracted text is too short
-      console.warn("pdf-parse returned insufficient text, falling back to pdfjs.");
+      const text = data.text || "";
+      console.log("pdf-parse succeeded. Text length:", text.length);
+      if (text.trim().length > 50) return text;
+      console.warn("pdf-parse returned insufficient text, trying pdfjs-dist fallback.");
     } catch (err) {
-      console.error("PDF Parsing Error:", err);
+      console.error("pdf-parse error:", err.message);
     }
+
+    // Fallback: pdfjs-dist (handles complex/encrypted PDFs)
     try {
-      const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
-      const loadingTask = pdfjsLib.getDocument({ data: buffer });
+      const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      const workerPath = path.resolve(__dirname, "../node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs");
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `file:///${workerPath.replace(/\\/g, "/")}`;
+      const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
       const pdfDoc = await loadingTask.promise;
-      let fullText = '';
-      for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
-        const page = await pdfDoc.getPage(pageNum);
-        const textContent = await page.getTextContent();
-        const strings = textContent.items.map(item => item.str);
-        fullText += strings.join(' ') + '\n';
+      let fullText = "";
+      for (let i = 1; i <= pdfDoc.numPages; i++) {
+        const page = await pdfDoc.getPage(i);
+        const content = await page.getTextContent();
+        const pageText = content.items.map((item) => item.str).join("\n");
+        fullText += pageText + "\n";
       }
-      console.log("pdfjs fallback succeeded. Text length:", fullText.length);
-      return fullText;
+      console.log("pdfjs-dist fallback succeeded. Text length:", fullText.length);
+      if (fullText.trim().length > 50) return fullText;
     } catch (fallbackErr) {
-      console.error("pdfjs fallback error:", fallbackErr);
-      // Final fallback: return raw buffer as string
-      return buffer.toString('utf8');
+      console.error("pdfjs-dist fallback error:", fallbackErr.message);
     }
-  } else if (isDocx) {
-    try {
-      const result = await mammoth.extractRawText({ buffer });
-      return result.value || "";
-    } catch (err) {
-      console.error("DOCX Parsing Error:", err);
-      return buffer.toString("utf8");
-    }
-  } else {
-    // Fallback: attempt to decode as string (useful for plain text/doc files)
-    return buffer.toString("utf8").replace(/[^\x20-\x7E\n\r\t]/g, "");
+
+    return buffer.toString("utf8");
   }
+
+  if (isDocxMime(mimeType)) {
+    try {
+      // mammoth needs a proper Buffer, not Uint8Array or ArrayBuffer
+      const docxBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+      const result = await mammoth.extractRawText({ buffer: docxBuffer });
+      const text = result.value || "";
+      console.log("mammoth succeeded. Text length:", text.length);
+      if (text.trim().length > 0) return text;
+      console.warn("mammoth returned empty text");
+    } catch (err) {
+      console.error("mammoth error:", err.message);
+    }
+    // Fallback: raw utf8 for doc/rtf
+    return buffer.toString("utf8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
+  }
+
+  return buffer.toString("utf8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
 }
 
 /**
- * Heuristically parses details from the resume text.
- * @param {string} text - Raw resume text
- * @returns {Object} Extracted candidate fields
+ * Pre-processes raw PDF/DOCX text to normalise it for regex-based extraction.
+ * Fixes common issues: missing spaces between words, missing newlines before
+ * section headers, camelCase concatenation from multi-column PDFs.
  */
-function parseResumeText(text) {
-  const lines = text
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(line => line.length > 0);
+function preprocessText(raw) {
+  let text = raw;
 
-  // 1. Extract Email
-  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
-  const emailMatch = text.match(emailRegex);
-  const email = emailMatch ? emailMatch[0] : null;
+  // 1. Normalise Windows line endings
+  text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-  // 2. Extract Phone Number
-  // Matches typical formats: +91 9999999999, 09999999999, 99999-99999, +1-555-555-5555, etc.
-  const phoneRegex = /(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4,6}/g;
-  let phone = null;
-  const phoneMatches = text.match(phoneRegex);
-  if (phoneMatches) {
-    // Find the first match that looks like a valid phone number (at least 10 digits/characters)
-    for (const match of phoneMatches) {
-      const digitsOnly = match.replace(/\D/g, "");
-      if (digitsOnly.length >= 10 && digitsOnly.length <= 15) {
-        phone = match.trim();
-        break;
-      }
-    }
+  // 2. Insert a space before an uppercase letter that immediately follows a
+  //    lowercase letter with no separator, EXCEPT for known camelCase words like JavaScript
+  //    This is risky but catches "ExperienceJohn" -> "Experience John".
+  //    We'll do a basic replace but then fix known words.
+  text = text.replace(/([a-z])([A-Z])/g, "$1 $2");
+  text = text.replace(/Java Script/gi, "JavaScript");
+  text = text.replace(/Type Script/gi, "TypeScript");
+  text = text.replace(/Postgre SQL/gi, "PostgreSQL");
+  text = text.replace(/Open CV/gi, "OpenCV");
+  text = text.replace(/Node\. js/gi, "Node.js");
+
+  // 3. Force a newline BEFORE common section header keywords so they sit on
+  //    their own line and our section-regex can find them.
+  const SECTION_HEADERS = [
+    "Skills", "Technical Skills", "Key Skills",
+    "Experience", "Work Experience", "Professional Experience", "Employment",
+    "Education", "Academic Background", "Qualifications",
+    "Certifications", "Certificates", "Awards",
+    "Projects", "Summary", "Objective", "Profile",
+    "Notice Period", "Availability",
+    "Languages", "Hobbies", "Interests", "References",
+    "Contact", "Personal Details",
+  ];
+  for (const header of SECTION_HEADERS) {
+    const escaped = header.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+    // Add newline before the header if it is not already at start of line
+    text = text.replace(new RegExp(`([^\n])(${escaped}\\s*[:\n])`, "gi"), "$1\n$2");
   }
 
-  // 3. Extract LinkedIn URL
-  const linkedinRegex = /(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[a-zA-Z0-9_-]+/i;
-  const linkedinMatch = text.match(linkedinRegex);
+  // 4. Collapse 3+ consecutive blank lines to 2
+  text = text.replace(/\n{3,}/g, "\n\n");
+
+  // 5. Remove stray bullet/dash chars at the start of lines (replace with nothing)
+  text = text.replace(/^[•·▪▸►‣–—\-\*]+\s*/gm, "");
+
+  return text;
+}
+
+function parseResumeText(text) {
+  if (!text || typeof text !== "string") return emptyResult();
+
+  // Pre-process to normalise raw PDF/DOCX text
+  text = preprocessText(text);
+
+  const lines = text.split(/\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  const textLower = text.toLowerCase();
+
+  // Email — allow + and dots in local part
+  const emailMatch = text.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+  const email = emailMatch ? emailMatch[0].toLowerCase() : null;
+
+  // Phone — covers +91 9876543210 / 09876543210 / 98765 43210 / (022) 1234 5678
+  let phone = null;
+  const phoneMatches = text.match(/(?:\+?[\d(][\d\s\-().]{8,20}\d)/g) || [];
+  for (const m of phoneMatches) {
+    const digits = m.replace(/\D/g, "");
+    if (digits.length >= 10 && digits.length <= 15) { phone = m.trim(); break; }
+  }
+
+  // LinkedIn
+  const linkedinMatch = text.match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[a-zA-Z0-9_\-]+(?:\/[a-zA-Z0-9_\-]*)?/i);
   const linkedinProfile = linkedinMatch ? linkedinMatch[0] : null;
 
-  // 4. Extract Name
-  // Heuristic: Check the first few lines of the resume.
-  // The first line that is short (2-4 words), does not contain numbers, emails, URLs, or typical header words, is likely the name.
-  let name = null;
-  const excludeWords = [
+  const name        = extractName(lines, email);
+  const skills      = extractSkills(text, textLower);
+  const location    = extractLocation(text, textLower);
+  const experience  = extractExperience(text);
+  const designation = extractDesignation(text);
+  const { currentCompany, previousCompanies } = extractCompanies(text, lines);
+  const education      = extractEducation(text, textLower, lines);
+  const certifications = extractCertifications(lines);
+  const noticePeriod   = extractNoticePeriod(text, textLower);
+  const expectedSalary = extractSalary(text);
+
+  return {
+    name, email, phoneNumber: phone, location, skills, education, experience,
+    workHistory: previousCompanies.join(", ") || null,
+    currentCompany, previousCompanies, designation,
+    certifications: certifications.slice(0, 5),
+    linkedinProfile, noticePeriod, expectedSalary,
+  };
+}
+
+function extractName(lines, email) {
+  const EXCLUDE = [
     "resume", "cv", "curriculum", "vitae", "profile", "summary", "contact",
     "email", "phone", "mobile", "address", "experience", "education", "skills",
-    "page", "details", "personal", "github", "linkedin", "portfolio"
+    "page", "details", "personal", "github", "linkedin", "portfolio", "objective",
+    "http", "www", "references", "declaration", "career"
   ];
-  for (let i = 0; i < Math.min(lines.length, 10); i++) {
-    const line = lines[i];
-    const wordCount = line.split(/\s+/).length;
-    const hasNumber = /\d/.test(line);
-    const hasAt = line.includes("@");
-    const hasSlash = line.includes("/") || line.includes("\\");
-    const isExcluded = excludeWords.some(word => line.toLowerCase().includes(word));
+  const emailLocalPart = email ? email.split("@")[0].toLowerCase() : "";
 
-    if (wordCount >= 2 && wordCount <= 4 && !hasNumber && !hasAt && !hasSlash && !isExcluded) {
-      // Basic formatting check: capitalized letters
-      const words = line.split(/\s+/);
-      const isCapitalized = words.every(word => /^[A-Z]/.test(word) || /^[a-zA-Z]/.test(word));
-      if (isCapitalized) {
-        name = line;
-        break;
-      }
+  for (let i = 0; i < Math.min(lines.length, 15); i++) {
+    let line = lines[i];
+    
+    // Strip common prefixes like "Name:" or "Name of Candidate -"
+    line = line.replace(/^(?:Name|Name of Candidate)\s*[:\-]\s*/i, "").trim();
+
+    const lower = line.toLowerCase();
+    if (line.length > 70) continue;
+    if (/\d/.test(line)) continue;                    // has digit
+    if (line.includes("@")) continue;                 // email fragment
+    if (/[\/\\|<>{}\[\]]/.test(line)) continue;      // special chars (removed : to allow Name:)
+    if (EXCLUDE.some((w) => lower.includes(w))) continue;
+    if (emailLocalPart && lower.includes(emailLocalPart)) continue;
+    
+    const words = line.trim().split(/\s+/);
+    if (words.length < 1 || words.length > 6) continue;
+    
+    // Every word must start with a letter (allows initials like A. or O'Brien)
+    if (words.every((w) => /^[A-Za-z]/.test(w))) {
+      // Bonus: at least one word is Title Case (not all-lowercase)
+      if (words.some((w) => /^[A-Z]/.test(w))) return line.trim();
     }
   }
-  // Fallback: If no name found by heuristic, take the very first non-empty line
-  if (!name && lines.length > 0) {
-    name = lines[0].substring(0, 50);
+  // Fallback: first non-empty line, capped
+  return lines.length > 0 ? lines[0].substring(0, 60).trim() : null;
+}
+
+function extractSkills(text, textLower) {
+  const found = new Set();
+
+  // Approach A: extract from a dedicated Skills section
+  // Matches: "Skills:", "Key Skills:", "Technical Skills:", "Skills\n"
+  const sectionRegex = /(?:^|\n)\s*(?:(?:key|technical|core|professional)\s+)?skills?\s*[:\-–]?\s*\n([\s\S]{10,1200}?)(?=\n\s*(?:[A-Z][A-Z\s]{2,}|experience|education|certification|work|employment|project|summary|objective|profile|declaration)\s*[:\n]|$)/im;
+  const sectionMatch = text.match(sectionRegex);
+  if (sectionMatch && sectionMatch[1]) {
+    // Split on newlines, commas, pipes, bullets
+    sectionMatch[1]
+      .split(/[\n,|/]+/)
+      .map((t) => t.replace(/^[\s\-*•►▸]+/, "").trim())
+      .filter((t) => t.length > 1 && t.length < 50)
+      .forEach((t) => { if (t) found.add(t); });
   }
 
-  // 5. Extract Skills
-  const skills = [];
-  const textLower = text.toLowerCase();
+  // Approach B: keyword list scan across full text
   for (const skill of COMMON_SKILLS) {
-    const escapedSkill = skill.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-    // Boundary match to avoid matching "Java" in "JavaScript" unless specified
-    let regex = new RegExp(`\\b${escapedSkill}\\b`, "i");
-    if (skill === "C++" || skill === "C#") {
-      regex = new RegExp(`${escapedSkill}`, "i");
-    }
-    if (regex.test(textLower)) {
-      skills.push(skill);
-    }
+    const escaped = skill.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+    // Word-boundary match; for skills ending in .js (e.g. Node.js) allow dot
+    const regex = skill.endsWith(".js")
+      ? new RegExp(`(?<![a-zA-Z])${escaped}(?![a-zA-Z])`, "i")
+      : new RegExp(`(?<![a-zA-Z0-9.])${escaped}(?![a-zA-Z0-9.])`, "i");
+    if (regex.test(text)) found.add(skill);
   }
 
-  // 6. Extract Location
-  let location = null;
+  return [...found].slice(0, 35);
+}
+
+function extractLocation(text, textLower) {
+  for (const pattern of [
+    /current\s*location\s*[:\-]\s*([^\n\r,|]{2,60})/i,
+    /location\s*[:\-]\s*([^\n\r,|]{2,60})/i,
+    /address\s*[:\-]\s*([^\n\r,|]{2,60})/i,
+    /city\s*[:\-]\s*([^\n\r,|]{2,60})/i,
+    /residence\s*[:\-]\s*([^\n\r,|]{2,60})/i,
+  ]) {
+    const m = text.match(pattern);
+    if (m && m[1]) return m[1].trim().substring(0, 60);
+  }
   for (const city of COMMON_CITIES) {
-    const regex = new RegExp(`\\b${city}\\b`, "i");
-    if (regex.test(textLower)) {
-      location = city;
-      break;
-    }
+    if (new RegExp(`\\b${city}\\b`, "i").test(textLower)) return city;
   }
-  if (!location) {
-    // Try regex patterns like: "Location: Pune" or "Address: Mumbai"
-    const locPatterns = [
-      /location\s*:\s*([^\n\r,]+)/i,
-      /address\s*:\s*([^\n\r,]+)/i,
-      /current\s+location\s*:\s*([^\n\r,]+)/i,
-      /lives\s+in\s*:\s*([^\n\r,]+)/i
-    ];
-    for (const pattern of locPatterns) {
-      const match = text.match(pattern);
-      if (match && match[1]) {
-        location = match[1].trim();
-        break;
-      }
-    }
-  }
+  return null;
+}
 
-  // 7. Extract Total Experience
-  let experience = null;
-  const expPatterns = [
-    /(\d+(?:\.\d+)?)\s*(?:\+)?\s*(?:years?|yrs?)\s*(?:of\s*)?experience/i,
-    /total\s+experience\s*:\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?)?/i,
-    /experience\s*:\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?)?/i
+function extractExperience(text) {
+  const patterns = [
+    // "5+ years of experience" / "5.5 yrs experience"
+    /(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?)\s*(?:of\s+)?(?:total\s+)?(?:work\s+)?experience/i,
+    // "Total Experience: 5 years"
+    /total\s+(?:work\s+)?(?:experience|exp)\s*[:\-–]\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?)?/i,
+    // "Experience: 5 years" / "Exp: 5 yrs"
+    /(?:experience|exp)\s*[:\-–]\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?)/i,
+    // "5 years of experience"
+    /(\d+(?:\.\d+)?)\s*(?:years?|yrs?)\s+(?:of\s+)?experience/i,
+    // "5+ yrs"
+    /(\d+(?:\.\d+)?)\s*\+\s*(?:years?|yrs?)/i,
+    // "Experience in years: 5"
+    /experience\s+in\s+years?\s*[:\-–]\s*(\d+(?:\.\d+)?)/i,
   ];
-  for (const pattern of expPatterns) {
-    const match = text.match(pattern);
-    if (match) {
-      const val = parseFloat(match[1]);
-      experience = `${val} ${val === 1 ? "year" : "years"}`;
-      break;
+  for (const pattern of patterns) {
+    const m = text.match(pattern);
+    if (m && m[1]) {
+      const val = parseFloat(m[1]);
+      if (!isNaN(val) && val >= 0 && val <= 60) return `${val} ${val === 1 ? "year" : "years"}`;
     }
   }
+  return null;
+}
 
-  // 8. Extract Designation
-  let designation = null;
-  for (const title of COMMON_DESIGNATIONS) {
-    const regex = new RegExp(`\\b${title}\\b`, "i");
-    if (regex.test(textLower)) {
-      designation = title;
-      break;
-    }
+function extractDesignation(text) {
+  const sorted = [...COMMON_DESIGNATIONS].sort((a, b) => b.length - a.length);
+  for (const title of sorted) {
+    const escaped = title.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+    if (new RegExp(`\\b${escaped}\\b`, "i").test(text)) return title;
   }
+  return null;
+}
 
-  // 9. Extract Current & Previous Companies
-  // Heuristic: Look for company indicators like "Pvt Ltd", "Ltd", "Inc", "Technologies" or phrases like "at [Company]"
-  const companyKeywords = ["Pvt", "Ltd", "Inc", "Technologies", "Solutions", "Corp", "Corporation", "Infosys", "TCS", "Cognizant", "Wipro", "Accenture", "Google", "Microsoft", "Amazon"];
-  const previousCompanies = [];
+function extractCompanies(text, lines) {
+  const keywords = [
+    "Pvt", "Ltd", "Limited", "Inc", "Corp", "Corporation",
+    "Technologies", "Technology", "Solutions", "Services", "Systems",
+    "Consulting", "Consultancy", "Software", "Infotech",
+    "Infosys", "TCS", "Cognizant", "Wipro", "Accenture", "HCL",
+    "Google", "Microsoft", "Amazon", "Meta", "Apple", "IBM", "Oracle",
+    "Capgemini", "Deloitte", "Salesforce"
+  ];
+  const companies = [];
   let currentCompany = null;
 
-  // Search lines for company indicators
+  const labelMatch = text.match(/(?:current\s+)?(?:company|employer|organization|firm)\s*[:\-]\s*([^\n\r,|]{3,60})/i);
+  if (labelMatch && labelMatch[1]) {
+    const c = labelMatch[1].trim();
+    currentCompany = c;
+    companies.push(c);
+  }
+
+  const atRegex = /(?:working|worked|employed)\s+(?:as\s+\S+\s+)?at\s+([A-Z][A-Za-z0-9\s&.]+?)(?:\s*[,\n\r.(]|$)/gm;
+  let atMatch;
+  while ((atMatch = atRegex.exec(text)) !== null) {
+    const c = atMatch[1].trim();
+    if (c.length > 2 && c.length < 60 && !companies.includes(c)) {
+      if (!currentCompany) currentCompany = c;
+      companies.push(c);
+    }
+  }
+
   for (const line of lines) {
-    const hasCompanyKeyword = companyKeywords.some(keyword => line.toLowerCase().includes(keyword.toLowerCase()));
-    const isHeader = line.length < 30 && /experience|work|history|employment/i.test(line);
-    if (hasCompanyKeyword && !isHeader) {
-      // Extract clean name (often everything before a comma, hyphen or parenthesis)
-      const cleanLine = line.split(/[,-]/)[0].trim().substring(0, 100);
-      if (cleanLine.length > 3 && !previousCompanies.includes(cleanLine)) {
-        previousCompanies.push(cleanLine);
+    if (line.length > 120) continue;
+    if (/experience|work|history|employment/i.test(line) && line.length < 35) continue;
+    if (keywords.some((kw) => new RegExp(`\\b${kw}\\b`, "i").test(line))) {
+      // Split by comma, dash, pipe, OR opening parenthesis
+      const clean = line.split(/[,\-|(]/)[0].trim().substring(0, 80);
+      if (clean.length > 3 && !companies.includes(clean)) {
+        companies.push(clean);
+        if (!currentCompany) currentCompany = clean;
       }
     }
   }
+  return { currentCompany, previousCompanies: companies.filter((c) => c !== currentCompany) };
+}
 
-  // Find patterns like "Software Engineer at Google"
-  const workingAtRegex = /(?:software engineer|developer|analyst|manager)\s+at\s+([A-Z][A-Za-z0-9\s]+?)(?:\r?\n|Current|,|\.|\(|since)/i;
-  const workingAtMatch = text.match(workingAtRegex);
-  if (workingAtMatch && workingAtMatch[1]) {
-    const comp = workingAtMatch[1].trim();
-    if (comp.length > 2 && comp.length < 50) {
-      currentCompany = comp;
-      if (!previousCompanies.includes(comp)) {
-        previousCompanies.unshift(comp); // Add as first
-      }
-    }
-  }
-
-  if (previousCompanies.length > 0 && !currentCompany) {
-    currentCompany = previousCompanies[0];
-  }
-
-  const prevCompList = previousCompanies.filter(c => c !== currentCompany);
-
-  // 10. Extract Education Details
-  const educationDetails = [];
+function extractEducation(text, textLower, lines) {
+  const found = [];
   for (const degree of DEGREES) {
-    const regex = new RegExp(`\\b${degree.replace(".", "\\.")}\\b`, "i");
+    const escaped = degree.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+    const regex = new RegExp(`(?<![a-zA-Z])${escaped}(?![a-zA-Z])`, "i");
     if (regex.test(textLower)) {
-      // Find the line containing the degree to get context
       for (const line of lines) {
-        if (regex.test(line)) {
-          educationDetails.push(line.substring(0, 120));
+        if (regex.test(line.toLowerCase())) {
+          const entry = line.trim().substring(0, 150);
+          if (!found.some((e) => e.includes(degree))) found.push(entry);
           break;
         }
       }
     }
   }
-  const education = educationDetails.length > 0 ? educationDetails.join(" | ") : null;
+  return found.length > 0 ? found.join(" | ") : null;
+}
 
-  // 11. Extract Certifications
-  const certifications = [];
-  const certKeywords = ["Certified", "Certification", "Credential"];
-  for (const line of lines) {
-    const isCert = certKeywords.some(kw => line.toLowerCase().includes(kw.toLowerCase()));
-    const hasSkill = COMMON_SKILLS.some(sk => line.toLowerCase().includes(sk.toLowerCase()));
-    if (isCert && line.length < 100 && (hasSkill || line.split(/\s+/).length > 2)) {
-      certifications.push(line);
-    }
-  }
+function extractCertifications(lines) {
+  const kws = ["certified", "certification", "certificate", "credential"];
+  return lines.filter((l) => kws.some((kw) => l.toLowerCase().includes(kw)) && l.length < 150 && l.split(/\s+/).length > 2).map((l) => l.trim());
+}
 
-  // 12. Extract Notice Period
-  let noticePeriod = null;
-  const noticePatterns = [
-    /notice\s*period\s*:\s*([^\n\r,]+)/i,
-    /notice\s*:\s*([^\n\r,]+)/i,
-    /availability\s*:\s*([^\n\r,]+)/i,
-    /available\s*to\s*start\s*:\s*([^\n\r,]+)/i
-  ];
-  for (const pattern of noticePatterns) {
-    const match = text.match(pattern);
-    if (match && match[1]) {
-      noticePeriod = match[1].trim();
-      break;
-    }
+function extractNoticePeriod(text, textLower) {
+  for (const pattern of [
+    /notice\s*period\s*[:\-]\s*([^\n\r,|]{1,40})/i,
+    /notice\s*[:\-]\s*([^\n\r,|]{1,40})/i,
+    /availability\s*[:\-]\s*([^\n\r,|]{1,40})/i,
+    /joining\s*(?:time|period)\s*[:\-]\s*([^\n\r,|]{1,40})/i,
+  ]) {
+    const m = text.match(pattern);
+    if (m && m[1]) return m[1].trim();
   }
-  if (!noticePeriod) {
-    const commonNoticeTerms = ["immediate", "15 days", "30 days", "1 month", "2 months", "3 months"];
-    for (const term of commonNoticeTerms) {
-      if (textLower.includes(term)) {
-        noticePeriod = term.charAt(0).toUpperCase() + term.slice(1);
-        break;
-      }
-    }
+  for (const term of ["immediate joiner", "immediate", "15 days", "30 days", "45 days", "60 days", "90 days", "1 month", "2 months", "3 months", "6 months", "serving notice"]) {
+    if (textLower.includes(term)) return term.charAt(0).toUpperCase() + term.slice(1);
   }
+  return null;
+}
 
-  // 13. Extract Expected Salary
-  let expectedSalary = null;
-  const salaryPatterns = [
-    /expected\s*ctc\s*:\s*([^\n\r,]+)/i,
-    /expected\s*salary\s*:\s*([^\n\r,]+)/i,
-    /ctc\s*expected\s*:\s*([^\n\r,]+)/i,
-    /ctc\s*:\s*([^\n\r,]+)/i
-  ];
-  for (const pattern of salaryPatterns) {
-    const match = text.match(pattern);
-    if (match && match[1]) {
-      expectedSalary = match[1].trim();
-      break;
-    }
+function extractSalary(text) {
+  for (const pattern of [
+    /expected\s*ctc\s*[:\-]\s*([^\n\r,|]{1,40})/i,
+    /expected\s*salary\s*[:\-]\s*([^\n\r,|]{1,40})/i,
+    /current\s*ctc\s*[:\-]\s*([^\n\r,|]{1,40})/i,
+    /ctc\s*expected\s*[:\-]\s*([^\n\r,|]{1,40})/i,
+    /ctc\s*[:\-]\s*([^\n\r,|]{1,40})/i,
+    /annual\s*(?:package|salary|ctc)\s*[:\-]\s*([^\n\r,|]{1,40})/i,
+  ]) {
+    const m = text.match(pattern);
+    if (m && m[1]) return m[1].trim();
   }
+  return null;
+}
 
+function emptyResult() {
   return {
-    name,
-    email,
-    phoneNumber: phone,
-    location,
-    skills,
-    education,
-    experience,
-    workHistory: previousCompanies.join(", ") || null,
-    currentCompany,
-    previousCompanies: prevCompList,
-    designation,
-    certifications: certifications.slice(0, 5), // limit to 5
-    linkedinProfile,
-    noticePeriod,
-    expectedSalary,
-    additionalInfo: lines.slice(0, 20).join("\n") // top snippet for debugging
+    name: null, email: null, phoneNumber: null, location: null, skills: [],
+    education: null, experience: null, workHistory: null, currentCompany: null,
+    previousCompanies: [], designation: null, certifications: [],
+    linkedinProfile: null, noticePeriod: null, expectedSalary: null
   };
 }
 
-module.exports = {
-  extractTextFromBuffer,
-  parseResumeText
-};
+module.exports = { extractTextFromBuffer, parseResumeText };
