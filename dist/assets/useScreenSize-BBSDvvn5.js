@@ -1,0 +1,1 @@
+import{r as n}from"./index-C_F6gZMd.js";const s=()=>{const[i,e]=n.useState("desktop");return n.useEffect(()=>{const t=()=>{window.innerWidth<640?e("mobile"):window.innerWidth<1024?e("tablet"):e("desktop")};return t(),window.addEventListener("resize",t),()=>window.removeEventListener("resize",t)},[]),i};export{s as u};
