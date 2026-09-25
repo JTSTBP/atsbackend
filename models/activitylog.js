@@ -56,10 +56,41 @@ const activityLogSchema = new mongoose.Schema(
       required: true,
       enum: ["CandidateByJob", "Job", "LeaveApplication", "SourceCandidate"], // All allowed models
     },
+
+    candidateId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CandidateByJob",
+    },
+
+    jobId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Job",
+    },
+
+    actionType: {
+      type: String,
+      trim: true,
+    },
+
+    performedByRole: {
+      type: String,
+      trim: true,
+    },
+
+    previousValue: mongoose.Schema.Types.Mixed,
+    newValue: mongoose.Schema.Types.Mixed,
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
   },
   {
     timestamps: true, // <-- Add createdAt & updatedAt automatically
   }
 );
+
+activityLogSchema.index({ candidateId: 1, createdAt: -1 });
+activityLogSchema.index({ actionType: 1, createdAt: -1 });
+activityLogSchema.index({ targetId: 1, targetModel: 1, createdAt: -1 });
 
 module.exports = mongoose.model("ActivityLog", activityLogSchema);

@@ -560,6 +560,9 @@ router.post("/", upload.single("resume"), async (req, res) => {
     });
 
     await candidate.save();
+    const candidateName = parsedFields.candidateName || parsedFields.CandidateName || "New Candidate";
+    const jobTitle = job.title;
+
     // Activity Log
     logActivity(
       req.body.createdBy,
@@ -567,7 +570,20 @@ router.post("/", upload.single("resume"), async (req, res) => {
       "candidate",
       `Created candidate`,
       candidate._id,
-      "CandidateByJob"
+      "CandidateByJob",
+      {
+        actionType: "candidate_created",
+        candidateId: candidate._id,
+        jobId: req.body.jobId,
+        newValue: candidate.status,
+        metadata: {
+          candidateName,
+          jobTitle,
+          status: candidate.status,
+          resumeUploaded: Boolean(req.file),
+          source: parsedFields.Source || parsedFields.source || "",
+        },
+      }
     );
 
     if (req.body.jobId) {
@@ -579,8 +595,6 @@ router.post("/", upload.single("resume"), async (req, res) => {
     }
 
     // 4️⃣ Send Email Notification to Mentor
-    const candidateName = parsedFields.candidateName || parsedFields.CandidateName || "New Candidate";
-    const jobTitle = job.title;
     // We don't await this to avoid blocking the response
     sendCreateNotificationToMentor(req.body.createdBy, candidateName, jobTitle);
 
@@ -1233,7 +1247,25 @@ router.put("/:id", upload.single("resume"), async (req, res) => {
       "candidate",
       `Updated candidate details`,
       id,
-      "CandidateByJob"
+      "CandidateByJob",
+      {
+        actionType: req.file ? "resume_replaced" : "candidate_updated",
+        candidateId: id,
+        jobId: req.body.jobId,
+        previousValue: changes.map((change) => ({
+          field: change.field,
+          value: change.oldValue,
+        })),
+        newValue: changes.map((change) => ({
+          field: change.field,
+          value: change.newValue,
+        })),
+        metadata: {
+          changes,
+          status: updatedCandidate.status,
+          resumeReplaced: Boolean(req.file),
+        },
+      }
     );
 
     // 5️⃣ Send email notification if there are changes
@@ -1517,7 +1549,30 @@ router.patch("/:id/status", offerLetterUpload.single("offerLetter"), async (req,
       "candidate-status",
       `Updated candidate status to "${status}"${interviewStage ? ` (${interviewStage} - ${stageStatus || "N/A"})` : ""}${status === "Rejected" && rejectedBy ? ` (Rejected by: ${rejectedBy})` : ""}${status === "Dropped" && droppedBy ? ` (Dropped by: ${droppedBy})` : ""}`,
       req.params.id,
-      "CandidateByJob"
+      "CandidateByJob",
+      {
+        actionType: "status_changed",
+        candidateId: req.params.id,
+        jobId: existingCandidate.jobId?._id || existingCandidate.jobId,
+        previousValue: existingCandidate.status,
+        newValue: status,
+        metadata: {
+          changes,
+          status,
+          comment,
+          interviewStage,
+          stageStatus,
+          stageNotes,
+          stageNameForHistory,
+          rejectedBy,
+          droppedBy,
+          rejectionReason,
+          joiningDate,
+          selectionDate,
+          expectedJoiningDate,
+          offerLetterUploaded: Boolean(req.file),
+        },
+      }
     );
 
     // Send email notification if there are changes
@@ -1574,6 +1629,25 @@ router.post("/:id/comments", async (req, res) => {
     if (!updatedCandidate) {
       return res.status(404).json({ success: false, message: "Candidate not found" });
     }
+
+    logActivity(
+      authorId,
+      "created",
+      "candidate-comment",
+      "Added candidate comment",
+      req.params.id,
+      "CandidateByJob",
+      {
+        actionType: "comment",
+        candidateId: req.params.id,
+        jobId: updatedCandidate.jobId,
+        newValue: text,
+        metadata: {
+          text,
+          status: updatedCandidate.status,
+        },
+      }
+    );
 
     const candidateObj = updatedCandidate.toObject();
     const candidateWithSignedUrl = {
@@ -1639,12 +1713,23 @@ router.patch("/:id/clear-notes", async (req, res) => {
 
     // Activity Log
     logActivity(
-      role || "Admin",
+      role || candidate.createdBy,
       "updated",
       "candidate-notes",
       `Cleared candidate remarks (Previous: "${oldNotes || "None"}")`,
       id,
-      "CandidateByJob"
+      "CandidateByJob",
+      {
+        actionType: "comment",
+        candidateId: id,
+        jobId: candidate.jobId,
+        previousValue: oldNotes || "",
+        newValue: "",
+        metadata: {
+          status: candidate.status,
+          text: "Candidate remarks cleared",
+        },
+      }
     );
 
     res.json({ success: true, message: "Remarks cleared successfully" });
@@ -1683,7 +1768,17 @@ router.delete("/:id/:role", async (req, res) => {
       "candidate",
       `Deleted candidate`,
       req.params.id,
-      "CandidateByJob"
+      "CandidateByJob",
+      {
+        actionType: "candidate_deleted",
+        candidateId: req.params.id,
+        jobId,
+        previousValue: candidate.status,
+        metadata: {
+          candidateName: candidate.dynamicFields?.candidateName || candidate.dynamicFields?.CandidateName || "",
+          status: candidate.status,
+        },
+      }
     );
 
     // 3. Decrease candidate count in the corresponding job
@@ -1886,6 +1981,32 @@ router.post("/send-email", async (req, res) => {
         pass: appPassword,
       },
     });
+
+    const senderUser = await User.findOne({ email: senderEmail }).select("_id designation").lean();
+    if (senderUser) {
+      candidates.forEach((candidate) => {
+        logActivity(
+          senderUser._id,
+          "sent",
+          "candidate-email",
+          `Sent candidate profile email to ${Array.isArray(recipientEmails) ? recipientEmails.join(", ") : recipientEmails}`,
+          candidate._id,
+          "CandidateByJob",
+          {
+            actionType: "email",
+            candidateId: candidate._id,
+            jobId: candidate.jobId?._id || candidate.jobId,
+            performedByRole: senderUser.designation,
+            metadata: {
+              recipientEmails,
+              ccEmails,
+              subject,
+              status: candidate.status,
+            },
+          }
+        );
+      });
+    }
 
     res.json({ success: true, message: "Email sent successfully" });
   } catch (error) {

@@ -5,10 +5,20 @@ async function logActivity(
   action,
   module,
   description,
-    targetId = null,
-  targetModel
+  targetId = null,
+  targetModel,
+  details = {}
 ) {
   try {
+    if (!userId) {
+      console.warn("Activity log skipped: missing userId", {
+        action,
+        module,
+        targetId,
+      });
+      return;
+    }
+
     await ActivityLog.create({
       userId,
       action,
@@ -16,6 +26,15 @@ async function logActivity(
       description,
       targetId,
       targetModel,
+      candidateId:
+        details.candidateId ||
+        (targetModel === "CandidateByJob" ? targetId : undefined),
+      jobId: details.jobId,
+      actionType: details.actionType || module || action,
+      performedByRole: details.performedByRole,
+      previousValue: details.previousValue,
+      newValue: details.newValue,
+      metadata: details.metadata || {},
     });
   } catch (error) {
     console.error("Activity log error:", error);
