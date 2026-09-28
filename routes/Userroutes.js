@@ -57,6 +57,12 @@ router.get("/", async (req, res) => {
         { email: searchRegex }
       ];
     }
+    
+    // If any filter is applied (search, role, reporter), exclude disabled users
+    // as per user request: "whenver admin try to filter any one dont show disable users list"
+    if (search || reporter) {
+      query.isDisabled = { $ne: true };
+    }
 
     // Role Filter
     if (role) {

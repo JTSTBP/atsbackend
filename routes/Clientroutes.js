@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Client = require('../models/Client');
 const clientUpload = require('../middleware/clientUpload');
 const { s3, deleteFile, getSignedUrl } = require('../config/s3Config');
@@ -9,21 +10,48 @@ const path = require('path');
 // Helper function to normalize URLs for comparison
 const normalizeUrl = (url) => {
     if (!url) return '';
-
-    // Remove protocol (http://, https://)
     let normalized = url.replace(/^https?:\/\//, '');
-
-    // Remove www.
     normalized = normalized.replace(/^www\./, '');
-
-    // Remove trailing slash
     normalized = normalized.replace(/\/$/, '');
-
-    // Convert to lowercase
     return normalized.toLowerCase();
 };
 
-// Create a new client
+// CRM DB connection for BD Executives
+const crmUri = process.env.CRM_MONGO_URI || 'mongodb+srv://sarun:JobsTerritory2025@cluster0.lyuxr.mongodb.net/CRM';
+let crmConn = null;
+
+const getCrmConnection = () => {
+    if (!crmConn || crmConn.readyState === 0) {
+        crmConn = mongoose.createConnection(crmUri);
+    }
+    return crmConn;
+};
+
+// GET /api/clients/bd-executives
+router.get('/bd-executives', async (req, res) => {
+    try {
+        if (!crmConn || (crmConn.readyState !== 1 && crmConn.readyState !== 2)) {
+            crmConn = mongoose.createConnection(crmUri);
+        }
+        if (crmConn.readyState === 2) {
+            await new Promise((resolve) => crmConn.once('open', resolve));
+        }
+        if (crmConn.db) {
+            const usersCol = crmConn.db.collection('users');
+            const bdExecs = await usersCol.find(
+                { role: 'BD Executive' },
+                { projection: { _id: 1, name: 1, email: 1, phone: 1, status: 1 } }
+            ).sort({ name: 1 }).toArray();
+
+            return res.json(bdExecs);
+        }
+        res.json([]);
+    } catch (err) {
+        console.error('Error fetching BD Executives from CRM:', err);
+        res.status(500).json({ message: 'Error fetching BD Executives', error: err.message });
+    }
+});
+
 router.post('/', clientUpload.single('logo'), async (req, res) => {
     try {
         const { companyName, websiteUrl, createdBy } = req.body;
