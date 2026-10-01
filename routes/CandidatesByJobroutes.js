@@ -636,18 +636,18 @@ router.get("/role-based-candidates", async (req, res) => {
     } else if (lowerDesignation === "recruiter") {
       allowedUserIds = [userId];
     } else if (lowerDesignation === "mentor" || lowerDesignation === "manager") {
-      const allUsers = await User.find({}).select("_id reporter designation");
+      const allUsers = await User.find({}).select("_id reporter secondary_managers designation");
       const userIdStr = userId.toString();
 
       // Get direct reportees (designation-agnostic)
       const directReporteeIds = allUsers
-        .filter(u => u.reporter && u.reporter.toString() === userIdStr)
+        .filter(u => (u.reporter && u.reporter.toString() === userIdStr) || (u.secondary_managers && u.secondary_managers.some(sm => sm.toString() === userIdStr)))
         .map(u => u._id.toString());
 
       if (lowerDesignation === "manager") {
         // Get indirect reportees (e.g., Recruiters reporting to Mentors who report to this Manager)
         const indirectReporteeIds = allUsers
-          .filter(u => u.reporter && directReporteeIds.includes(u.reporter.toString()))
+          .filter(u => (u.reporter && directReporteeIds.includes(u.reporter.toString())) || (u.secondary_managers && u.secondary_managers.some(sm => directReporteeIds.includes(sm.toString()))))
           .map(u => u._id.toString());
 
         // Full team: Self + Direct reportees + Indirect reportees

@@ -137,7 +137,12 @@ router.get("/", async (req, res) => {
         // Mentor sees their own jobs OR jobs they are assigned to
         // OR jobs assigned to any of their reportees (recruiters)
         if (userId) {
-          const reportees = await User.find({ reporter: userId }).select("_id");
+          const reportees = await User.find({
+            $or: [
+              { reporter: userId },
+              { secondary_managers: userId }
+            ]
+          }).select("_id");
           const reporteeIds = reportees.map(u => u._id);
           const allowedIds = [userId, ...reporteeIds];
 
@@ -154,12 +159,23 @@ router.get("/", async (req, res) => {
         // Manager strictly sees jobs CREATED BY or ASSIGNED TO Manager + Mentors (direct reportees)
         // OR ASSIGNED TO any of their entire team (Mentors + Recruiters) via assignedRecruiters
         if (userId) {
-          const directMentors = await User.find({ reporter: userId, designation: "Mentor" }).select("_id");
+          const directMentors = await User.find({ 
+            designation: "Mentor",
+            $or: [
+              { reporter: userId },
+              { secondary_managers: userId }
+            ]
+          }).select("_id");
           const mentorIds = directMentors.map(u => u._id);
           const mentorAllowedIds = [userId, ...mentorIds];
 
           // Sub-reportees for recruiters
-          const subReportees = await User.find({ reporter: { $in: mentorAllowedIds } }).select("_id");
+          const subReportees = await User.find({
+            $or: [
+              { reporter: { $in: mentorAllowedIds } },
+              { secondary_managers: { $in: mentorAllowedIds } }
+            ]
+          }).select("_id");
           const allReporteeIds = [...new Set([...mentorAllowedIds, ...subReportees.map(u => u._id)])];
 
           andConditions.push({

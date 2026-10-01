@@ -24,6 +24,10 @@ const UserSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
   },
+  secondary_managers: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+  }],
   password: {
     type: String,
     required: [true, "Password is required"],

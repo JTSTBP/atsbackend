@@ -7,7 +7,7 @@ const router = express.Router();
 // ➕ Create New User
 router.post("/", async (req, res) => {
   try {
-    const { name, email, designation, password, reporter, isAdmin, personalEmail, phoneNumber, phone, department, joinDate, dateOfJoining, dateOfBirth, appPassword } = req.body;
+    const { name, email, designation, password, reporter, secondary_managers, isAdmin, personalEmail, phoneNumber, phone, department, joinDate, dateOfJoining, dateOfBirth, appPassword } = req.body;
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
@@ -21,6 +21,7 @@ router.post("/", async (req, res) => {
       designation,
       password,
       reporter: reporter || null,
+      secondary_managers: secondary_managers || [],
       isAdmin: isAdmin || false,
       personalEmail,
       phoneNumber,
@@ -76,7 +77,15 @@ router.get("/", async (req, res) => {
 
     // Reporter Filter
     if (reporter) {
-      query.reporter = reporter;
+      if (query.$or) {
+        query.$and = [
+          { $or: query.$or },
+          { $or: [{ reporter: reporter }, { secondary_managers: reporter }] }
+        ];
+        delete query.$or;
+      } else {
+        query.$or = [{ reporter: reporter }, { secondary_managers: reporter }];
+      }
     }
 
     // If Pagination params are present
@@ -88,6 +97,7 @@ router.get("/", async (req, res) => {
       const users = await User.find(query)
         .sort({ isDisabled: 1, createdAt: -1 })
         .populate("reporter", "name designation")
+        .populate("secondary_managers", "name designation")
         .skip(skip)
         .limit(limitNum);
 
@@ -104,7 +114,8 @@ router.get("/", async (req, res) => {
     // Default: Return All Users (Backward Compatibility)
     const users = await User.find(query)
       .sort({ isDisabled: 1, createdAt: -1 })
-      .populate("reporter", "name designation");
+      .populate("reporter", "name designation")
+      .populate("secondary_managers", "name designation");
 
     res.json(users);
 
@@ -115,7 +126,7 @@ router.get("/", async (req, res) => {
 });
 
 router.put("/:id", async (req, res) => {
-  const { name, email, designation, reporter, password, isAdmin, personalEmail, phoneNumber, phone, department, joinDate, dateOfJoining, dateOfBirth, appPassword, isDisabled } = req.body;
+  const { name, email, designation, reporter, secondary_managers, password, isAdmin, personalEmail, phoneNumber, phone, department, joinDate, dateOfJoining, dateOfBirth, appPassword, isDisabled } = req.body;
 
   try {
     let user = await User.findById(req.params.id);
@@ -135,6 +146,9 @@ router.put("/:id", async (req, res) => {
     user.email = email || user.email;
     user.designation = designation || user.designation;
     user.reporter = reporter || user.reporter;
+    if (secondary_managers !== undefined) {
+      user.secondary_managers = secondary_managers;
+    }
     user.isAdmin = isAdmin !== undefined ? isAdmin : user.isAdmin;
     user.personalEmail = personalEmail || user.personalEmail;
     user.phoneNumber = phoneNumber || user.phoneNumber;
