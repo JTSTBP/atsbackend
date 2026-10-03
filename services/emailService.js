@@ -62,10 +62,10 @@ const getDefaultEmailConfig = () => {
     };
 };
 
-const getEmailProvider = () => clean(process.env.EMAIL_PROVIDER || process.env.MAIL_PROVIDER || "smtp").toLowerCase();
+const getEmailProvider = (providerOverride) => clean(providerOverride || process.env.EMAIL_PROVIDER || process.env.MAIL_PROVIDER || "smtp").toLowerCase();
 
-const assertValidEmailProvider = (traceId) => {
-    const provider = getEmailProvider();
+const assertValidEmailProvider = (traceId, providerOverride) => {
+    const provider = getEmailProvider(providerOverride);
     if (!["resend", "smtp"].includes(provider)) {
         const error = new Error(`Invalid email provider "${provider}". Use EMAIL_PROVIDER=resend or EMAIL_PROVIDER=smtp.`);
         error.code = "INVALID_EMAIL_PROVIDER";
@@ -585,32 +585,37 @@ const buildSmtpFailure = ({ traceId, attempts, lastError, diagnostics }) => {
     return error;
 };
 
-const sendMail = async ({ fromName = "Jobs Territory", from, to, cc, bcc, replyTo, subject, text, html, attachments, auth } = {}) => {
+const sendMail = async ({ fromName = "Jobs Territory", from, to, cc, bcc, replyTo, subject, text, html, attachments, auth, provider: providerOverride } = {}) => {
     const config = getDefaultEmailConfig();
     const senderEmail = clean(from || auth?.user || config.user);
     const authUser = clean(auth?.user) || config.user;
     const authPass = normalizePassword(auth?.pass) || config.pass;
     const traceId = crypto.randomBytes(6).toString("hex");
-    const provider = assertValidEmailProvider(traceId);
+    const provider = assertValidEmailProvider(traceId, providerOverride);
 
     if (!to) {
         throw new Error("Email recipient is required.");
     }
 
     if (provider === "resend") {
-        return sendMailWithResend({
-            fromName,
-            from: senderEmail,
-            to,
-            cc,
-            bcc,
-            replyTo: replyTo || clean(process.env.SENDER_ID) || senderEmail,
-            subject,
-            text,
-            html,
-            attachments,
-            traceId,
-        });
+        try {
+            return await sendMailWithResend({
+                fromName,
+                from: senderEmail,
+                to,
+                cc,
+                bcc,
+                replyTo: replyTo || clean(process.env.SENDER_ID) || senderEmail,
+                subject,
+                text,
+                html,
+                attachments,
+                traceId,
+            });
+        } catch (error) {
+            error.provider = provider;
+            throw error;
+        }
     }
 
     if (!authUser || !authPass) {
@@ -618,6 +623,7 @@ const sendMail = async ({ fromName = "Jobs Territory", from, to, cc, bcc, replyT
         error.code = "SMTP_AUTH_FAILED";
         error.traceId = traceId;
         error.smtpAttempts = [];
+        error.provider = provider;
         throw error;
     }
 
@@ -668,7 +674,9 @@ const sendMail = async ({ fromName = "Jobs Territory", from, to, cc, bcc, replyT
         ? await getEmailDiagnostics().catch(error => ({ error: error.message }))
         : undefined;
 
-    throw buildSmtpFailure({ traceId, attempts, lastError, diagnostics });
+    const failure = buildSmtpFailure({ traceId, attempts, lastError, diagnostics });
+    failure.provider = provider;
+    throw failure;
 };
 
 const verifyEmailTransport = async (auth = {}) => {
@@ -706,7 +714,7 @@ const formatEmailErrorResponse = (error) => ({
     code: error.code || classifySmtpError(error),
     traceId: error.traceId,
     emailServiceVersion: error.emailServiceVersion || EMAIL_SERVICE_VERSION,
-    provider: getEmailProvider(),
+    provider: error.provider || getEmailProvider(),
     smtpAttempts: error.smtpAttempts,
     diagnostics: error.diagnostics,
     providerResponse: error.providerResponse,

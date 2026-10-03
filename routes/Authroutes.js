@@ -125,7 +125,13 @@ router.post("/login", async (req, res) => {
 });
 router.get("/activity-logs", async (req, res) => {
   try {
-    const logs = await ActivityLog.find()
+    const logs = await ActivityLog.find({
+      $or: [
+        { targetId: { $exists: false } },
+        { targetId: null },
+        { targetModel: { $in: ["CandidateByJob", "Job", "LeaveApplication", "SourceCandidate"] } }
+      ]
+    })
       .populate("userId", "name email role")
       .populate("targetId") // Mongoose now knows correct model (Candidate, Job, etc.)
       .sort({ createdAt: -1 })

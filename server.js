@@ -22,6 +22,8 @@ const sourceCandidateRoutes = require("./routes/SourceCandidateRoutes");
 const statementUploadRoutes = require("./routes/StatementUploadroutes");
 const emailDiagnosticsRoutes = require("./routes/EmailDiagnosticsroutes");
 const { startMonthlyAttendanceScheduler } = require("./schedulers/monthlyAttendanceScheduler");
+const ceoDailyReportRoutes = require("./routes/CeoDailyReportroutes");
+const { startCeoDailyReportScheduler } = require("./schedulers/ceoDailyReportScheduler");
 
 // Initialize Express app
 const app = express();
@@ -50,6 +52,7 @@ app.use("/api/return-invoices", returnInvoiceRoutes);
 app.use("/api/source-candidates", sourceCandidateRoutes);
 app.use("/api/statements", statementUploadRoutes);
 app.use("/api/email", emailDiagnosticsRoutes);
+app.use("/api/ceo-daily-reports", ceoDailyReportRoutes);
 
 // Serve frontend dist
 app.use(express.static(path.join(__dirname, "dist")));
@@ -79,6 +82,7 @@ const connectDB = async () => {
       console.log(`🚀 Server running on port ${PORT}`)
     );
     startMonthlyAttendanceScheduler();
+    startCeoDailyReportScheduler();
   } catch (error) {
     console.error("❌ MongoDB Connection Error:", error.message);
     

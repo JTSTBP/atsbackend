@@ -127,6 +127,19 @@ router.get("/", async (req, res) => {
     }
 
     // 4️⃣ Role-Based Filtering
+    if (req.query.createdBy && req.query.createdBy !== "all") {
+      andConditions.push({ CreatedBy: req.query.createdBy });
+    }
+
+    if (req.query.assignedTo && req.query.assignedTo !== "all") {
+      andConditions.push({
+        $or: [
+          { assignedRecruiters: req.query.assignedTo },
+          { assignedMentors: req.query.assignedTo }
+        ]
+      });
+    }
+
     if (role) {
       const userRole = role.toLowerCase();
 
