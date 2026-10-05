@@ -1,6 +1,7 @@
 const express = require("express");
 const CeoDailyReportLog = require("../models/CeoDailyReportLog");
 const { protect } = require("../middleware/authMiddleware");
+const { runDueCeoDailyReports } = require("../schedulers/ceoDailyReportScheduler");
 const {
   getSettings,
   updateSettings,
@@ -11,6 +12,26 @@ const {
 } = require("../services/ceoDailyReportService");
 
 const router = express.Router();
+
+router.post("/cron/run-due", async (req, res) => {
+  try {
+    const configuredSecret = process.env.CEO_DAILY_REPORT_CRON_SECRET;
+    const providedSecret = req.headers["x-cron-secret"] || req.query.secret;
+
+    if (!configuredSecret) {
+      return res.status(404).json({ success: false, message: "Cron endpoint is not configured" });
+    }
+
+    if (providedSecret !== configuredSecret) {
+      return res.status(401).json({ success: false, message: "Invalid cron secret" });
+    }
+
+    const result = await runDueCeoDailyReports("external cron");
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
 const requireAdmin = (req, res, next) => {
   if (req.user?.designation !== "Admin") {
