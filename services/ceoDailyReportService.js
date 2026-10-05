@@ -676,7 +676,7 @@ const sendCeoDailyReport = async ({ slot = "12PM", force = false, test = false, 
         cc: ccRecipients,
         subject,
         html,
-        provider: process.env.CEO_DAILY_REPORT_EMAIL_PROVIDER || process.env.EMAIL_PROVIDER || "smtp",
+        provider: process.env.CEO_DAILY_REPORT_EMAIL_PROVIDER || "smtp",
       });
       log.emailStatus = "sent";
     } catch (error) {
