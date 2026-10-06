@@ -193,7 +193,7 @@ router.get("/", async (req, res) => {
 
           andConditions.push({
             $or: [
-              { CreatedBy: { $in: mentorAllowedIds } },
+              { CreatedBy: { $in: allReporteeIds } },
               { assignedMentors: { $in: mentorAllowedIds } },
               { assignedRecruiters: { $in: allReporteeIds } }
             ]

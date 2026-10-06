@@ -30,6 +30,14 @@ const getDateRangeMatch = (startDate, endDate, field = "createdAt") => {
   return { [field]: range };
 };
 
+const buildClientFilter = (client) => {
+  if (!client || client === "all") return {};
+  if (mongoose.Types.ObjectId.isValid(client)) {
+    return { "client._id": new mongoose.Types.ObjectId(client) };
+  }
+  return { "client.companyName": new RegExp(client, "i") };
+};
+
 
 // Helper function to send email notification to mentor when a candidate is created
 async function sendCreateNotificationToMentor(recruiterId, candidateName, jobTitle) {
@@ -335,7 +343,7 @@ router.get("/", async (req, res) => {
       // Relational Filtering (Client & Job Title)
       {
         $match: {
-          ...(client && client !== "all" ? { "client.companyName": new RegExp(client, "i") } : {}),
+          ...buildClientFilter(client),
           ...(jobTitle && jobTitle !== "all" ? { "job.title": new RegExp(jobTitle, "i") } : {}),
           ...(reporterId && reporterId !== "all" ? { "reporter._id": new mongoose.Types.ObjectId(reporterId) } : {}),
           ...(recruiterId && recruiterId !== "all" ? { "creator._id": new mongoose.Types.ObjectId(recruiterId) } : {}),
@@ -789,7 +797,7 @@ router.get("/role-based-candidates", async (req, res) => {
       // 3. Secondary Match (Relational Filters)
       {
         $match: {
-          ...(client && client !== "all" ? { "client.companyName": new RegExp(client, "i") } : {}),
+          ...buildClientFilter(client),
           ...(jobTitle && jobTitle !== "all" ? { "job.title": new RegExp(jobTitle, "i") } : {}),
           ...(reporterId && reporterId !== "all" ? { "reporter._id": new mongoose.Types.ObjectId(reporterId) } : {}),
           ...(recruiterId && recruiterId !== "all" ? { "creator._id": new mongoose.Types.ObjectId(recruiterId) } : {}),
