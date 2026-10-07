@@ -146,13 +146,27 @@ const buildStatusColumns = (statusTotals) => {
   return [...BASE_STATUS_COLUMNS, ...dynamicStatuses.sort()];
 };
 
+const hasActiveRecruiterAssignment = (job, activeRecruiterIdSet) => {
+  const assignedRecruiters = (job.assignedRecruiters || []).map((id) => String(id));
+  const leadRecruiterId = String(job.leadRecruiter || "");
+
+  return assignedRecruiters.some((id) => activeRecruiterIdSet.has(id)) ||
+    activeRecruiterIdSet.has(leadRecruiterId);
+};
+
 const generateCeoDailyReportData = async ({ slot = "12PM", referenceDate = new Date(), timezone = DEFAULT_TIMEZONE } = {}) => {
   const period = getDailyReportPeriod({ slot, referenceDate, timezone });
   const recruiters = await User.find({ designation: /^Recruiter$/i, isDisabled: { $ne: true } }).select("_id name email designation").lean();
   const mentors = await User.find({ designation: /^Mentor$/i, isDisabled: { $ne: true } }).select("_id name email designation").lean();
-  const activeJobs = await Job.find({ status: { $in: ACTIVE_JOB_STATUSES } })
+  const activeRecruiterIdSet = new Set(recruiters.map((recruiter) => String(recruiter._id)));
+  const activeMentorIdSet = new Set(mentors.map((mentor) => String(mentor._id)));
+  const activeJobs = (await Job.find({ status: { $in: ACTIVE_JOB_STATUSES } })
     .select("_id title status noOfPositions assignedRecruiters leadRecruiter CreatedBy createdAt")
-    .lean();
+    .lean())
+    .filter((job) => (
+      activeMentorIdSet.has(String(job.CreatedBy || "")) ||
+      hasActiveRecruiterAssignment(job, activeRecruiterIdSet)
+    ));
 
   const activeJobIds = activeJobs.map((job) => job._id);
   const activeJobIdSet = new Set(activeJobIds.map((id) => String(id)));
@@ -242,6 +256,11 @@ const generateCeoDailyReportData = async ({ slot = "12PM", referenceDate = new D
   });
 
   const totalJoinedToday = recruiterRows.reduce((sum, row) => sum + row.joinedToday.length, 0);
+  const mentorActiveJobIdSet = new Set(
+    activeJobs
+      .filter((job) => activeMentorIdSet.has(String(job.CreatedBy || "")))
+      .map((job) => String(job._id))
+  );
   const summary = {
     activeRecruiters: recruiters.length,
     activeRequirementsAssigned: recruiterRows.reduce((sum, row) => sum + row.activeRequirements, 0),
@@ -249,8 +268,17 @@ const generateCeoDailyReportData = async ({ slot = "12PM", referenceDate = new D
     todaysUploads: recruiterRows.reduce((sum, row) => sum + row.todaysUploads, 0),
     statusTotals,
     jobsCreatedToday: mentorRows.reduce((sum, row) => sum + row.jobsCreatedToday, 0),
-    activeRequirements: activeJobs.length,
-    activeOpenings: Math.max(0, activeJobs.reduce((sum, job) => sum + (Number(job.noOfPositions) || 0), 0) - candidates.filter(c => normalizeStatus(c.status) === "Joined").length),
+    activeRequirements: mentorActiveJobIdSet.size,
+    activeOpenings: Math.max(
+      0,
+      activeJobs
+        .filter((job) => mentorActiveJobIdSet.has(String(job._id)))
+        .reduce((sum, job) => sum + (Number(job.noOfPositions) || 0), 0) -
+      candidates.filter((candidate) => (
+        mentorActiveJobIdSet.has(String(candidate.jobId?._id || candidate.jobId)) &&
+        normalizeStatus(candidate.status) === "Joined"
+      )).length
+    ),
     totalJoinedToday,
   };
 

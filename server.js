@@ -21,6 +21,7 @@ const returnInvoiceRoutes = require("./routes/ReturnInvoiceroutes");
 const sourceCandidateRoutes = require("./routes/SourceCandidateRoutes");
 const statementUploadRoutes = require("./routes/StatementUploadroutes");
 const emailDiagnosticsRoutes = require("./routes/EmailDiagnosticsroutes");
+const recruiterFollowupRoutes = require("./routes/RecruiterFollowuproutes");
 const { startMonthlyAttendanceScheduler } = require("./schedulers/monthlyAttendanceScheduler");
 const ceoDailyReportRoutes = require("./routes/CeoDailyReportroutes");
 const { startCeoDailyReportScheduler } = require("./schedulers/ceoDailyReportScheduler");
@@ -52,6 +53,7 @@ app.use("/api/return-invoices", returnInvoiceRoutes);
 app.use("/api/source-candidates", sourceCandidateRoutes);
 app.use("/api/statements", statementUploadRoutes);
 app.use("/api/email", emailDiagnosticsRoutes);
+app.use("/api/recruiter/follow-ups", recruiterFollowupRoutes);
 app.use("/api/ceo-daily-reports", ceoDailyReportRoutes);
 
 // Serve frontend dist
