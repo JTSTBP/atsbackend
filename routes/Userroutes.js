@@ -1,6 +1,7 @@
 const express = require("express");
 const User = require("../models/Users");
 const bcrypt = require("bcryptjs");
+const logActivity = require("./logactivity");
 
 const router = express.Router();
 
@@ -100,6 +101,7 @@ router.get("/", async (req, res) => {
         .sort({ isDisabled: 1, createdAt: -1 })
         .populate("reporter", "name designation")
         .populate("secondary_managers", "name designation")
+        .populate("disabledBy", "name")
         .skip(skip)
         .limit(limitNum);
 
@@ -117,7 +119,8 @@ router.get("/", async (req, res) => {
     const users = await User.find(query)
       .sort({ isDisabled: 1, createdAt: -1 })
       .populate("reporter", "name designation")
-      .populate("secondary_managers", "name designation");
+      .populate("secondary_managers", "name designation")
+      .populate("disabledBy", "name");
 
     res.json(users);
 
@@ -203,16 +206,45 @@ router.delete("/:id", async (req, res) => {
 // 🔄 Toggle User Status (Enable/Disable)
 router.patch("/:id/toggle-status", async (req, res) => {
   try {
+    const { disabledBy } = req.body;
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ msg: "User not found" });
 
     user.isDisabled = !user.isDisabled;
+    if (user.isDisabled) {
+      if (disabledBy) user.disabledBy = disabledBy;
+      user.disabledAt = new Date();
+    } else {
+      user.disabledBy = null;
+      user.disabledAt = null;
+    }
     await user.save();
+
+    // Re-fetch with populated disabledBy so the frontend gets { _id, name }
+    const updatedUser = await User.findById(user._id).populate("disabledBy", "name");
+
+    if (disabledBy) {
+      await logActivity(
+        disabledBy,
+        user.isDisabled ? "DISABLED_USER" : "ENABLED_USER",
+        "User Management",
+        `User ${user.name} (${user.email}) was ${user.isDisabled ? "disabled" : "enabled"}`,
+        user._id,
+        "User",
+        {
+          targetUserId: user._id,
+          targetUserName: user.name,
+          targetUserEmail: user.email,
+        }
+      );
+    }
 
     res.json({
       success: true,
-      message: `User ${user.isDisabled ? "disabled" : "enabled"} successfully`,
-      isDisabled: user.isDisabled
+      message: `User ${updatedUser.isDisabled ? "disabled" : "enabled"} successfully`,
+      isDisabled: updatedUser.isDisabled,
+      disabledBy: updatedUser.disabledBy,   // now populated: { _id, name }
+      disabledAt: updatedUser.disabledAt
     });
   } catch (err) {
     console.error("Error toggling user status:", err);

@@ -74,6 +74,13 @@ const UserSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  disabledBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+  },
+  disabledAt: {
+    type: Date,
+  },
 });
 
 
