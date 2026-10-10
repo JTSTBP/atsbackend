@@ -4,6 +4,8 @@ const { sendCeoDailyReport } = require("../services/ceoDailyReportService");
 
 const REPORT_TYPE = "ceo_daily_ats_performance";
 const pad = (value) => String(value).padStart(2, "0");
+const inFlightReports = new Set();
+const completedReports = new Set();
 
 const getCurrentPartsInTimezone = (timezone) => {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -39,6 +41,46 @@ const hasSuccessfulReport = async (reportDate, slot) => {
   return Boolean(sentLog);
 };
 
+const runAutomaticReportOnce = async ({ slot, reportDate, source }) => {
+  const runtimeKey = `${reportDate}:${slot}`;
+
+  if (completedReports.has(runtimeKey)) {
+    const skipped = { slot, skipped: true, reason: `Report already completed in this server process for ${reportDate}.` };
+    console.log(`[CEO Daily Report] ${source} skipped ${slot}; ${skipped.reason}`);
+    return skipped;
+  }
+
+  if (inFlightReports.has(runtimeKey)) {
+    const skipped = { slot, skipped: true, reason: `Report is already running for ${reportDate}.` };
+    console.log(`[CEO Daily Report] ${source} skipped ${slot}; ${skipped.reason}`);
+    return skipped;
+  }
+
+  inFlightReports.add(runtimeKey);
+  try {
+    if (await hasSuccessfulReport(reportDate, slot)) {
+      completedReports.add(runtimeKey);
+      const skipped = { slot, skipped: true, reason: `Report already sent for ${reportDate}.` };
+      console.log(`[CEO Daily Report] ${source} skipped ${slot}; ${skipped.reason}`);
+      return skipped;
+    }
+
+    console.log(`[CEO Daily Report] ${source} sending ${slot} report for ${reportDate}.`);
+    const result = await sendCeoDailyReport({ slot });
+    if (result.skipped) {
+      console.log(`[CEO Daily Report] ${source} ${slot} skipped: ${result.reason}`);
+    } else {
+      console.log(`[CEO Daily Report] ${source} ${slot} completed with status ${result.log.status}.`);
+      if (result.log?.emailStatus === "sent") {
+        completedReports.add(runtimeKey);
+      }
+    }
+    return { slot, ...result };
+  } finally {
+    inFlightReports.delete(runtimeKey);
+  }
+};
+
 const runDueCeoDailyReports = async (source = "catch-up") => {
   const timezone = process.env.CEO_DAILY_REPORT_TIMEZONE || "Asia/Kolkata";
   const now = getCurrentPartsInTimezone(timezone);
@@ -59,21 +101,8 @@ const runDueCeoDailyReports = async (source = "catch-up") => {
 
   for (const slot of dueSlots) {
     try {
-      if (await hasSuccessfulReport(reportDate, slot)) {
-        const skipped = { slot, skipped: true, reason: `Report already sent for ${reportDate}.` };
-        console.log(`[CEO Daily Report] ${source} skipped ${slot}; ${skipped.reason}`);
-        results.push(skipped);
-        continue;
-      }
-
-      console.log(`[CEO Daily Report] ${source} sending missed ${slot} report for ${reportDate}.`);
-      const result = await sendCeoDailyReport({ slot });
-      if (result.skipped) {
-        console.log(`[CEO Daily Report] ${source} ${slot} skipped: ${result.reason}`);
-      } else {
-        console.log(`[CEO Daily Report] ${source} ${slot} completed with status ${result.log.status}.`);
-      }
-      results.push({ slot, ...result });
+      const result = await runAutomaticReportOnce({ slot, reportDate, source });
+      results.push(result);
     } catch (error) {
       console.error(`[CEO Daily Report] ${source} ${slot} failed:`, error.message);
       results.push({ slot, success: false, error: error.message });
@@ -87,7 +116,12 @@ const startCeoDailyReportScheduler = () => {
   const timezone = process.env.CEO_DAILY_REPORT_TIMEZONE || "Asia/Kolkata";
   const noonCron = process.env.CEO_DAILY_REPORT_12PM_CRON || "0 12 * * *";
   const eveningCron = process.env.CEO_DAILY_REPORT_7PM_CRON || "0 19 * * *";
-  const catchupIntervalMinutes = Number(process.env.CEO_DAILY_REPORT_CATCHUP_INTERVAL_MINUTES || 10);
+  const intervalCatchupEnabled = process.env.CEO_DAILY_REPORT_ENABLE_INTERVAL_CATCHUP === "true";
+  const catchupIntervalMinutes = Number(process.env.CEO_DAILY_REPORT_CATCHUP_INTERVAL_MINUTES || 0);
+
+  CeoDailyReportLog.createIndexes().catch((error) => {
+    console.error("[CEO Daily Report] Failed to ensure report log indexes:", error.message);
+  });
 
   const scheduleReport = (slot, expression) => {
     if (!cron.validate(expression)) {
@@ -100,12 +134,8 @@ const startCeoDailyReportScheduler = () => {
       async () => {
         console.log(`[CEO Daily Report] Scheduled ${slot} report generation started.`);
         try {
-          const result = await sendCeoDailyReport({ slot });
-          if (result.skipped) {
-            console.log(`[CEO Daily Report] ${slot} skipped: ${result.reason}`);
-          } else {
-            console.log(`[CEO Daily Report] ${slot} completed with status ${result.log.status}.`);
-          }
+          const now = getCurrentPartsInTimezone(timezone);
+          await runAutomaticReportOnce({ slot, reportDate: getReportDate(now), source: "scheduled" });
         } catch (error) {
           console.error(`[CEO Daily Report] ${slot} failed:`, error.message);
         }
@@ -122,11 +152,13 @@ const startCeoDailyReportScheduler = () => {
   console.log(`[CEO Daily Report] Startup catch-up check enabled in timezone "${timezone}".`);
   runDueCeoDailyReports("startup catch-up");
 
-  if (catchupIntervalMinutes > 0) {
+  if (intervalCatchupEnabled && catchupIntervalMinutes > 0) {
     setInterval(() => {
       runDueCeoDailyReports("interval catch-up");
     }, catchupIntervalMinutes * 60 * 1000);
     console.log(`[CEO Daily Report] Interval catch-up check running every ${catchupIntervalMinutes} minutes.`);
+  } else {
+    console.log("[CEO Daily Report] Interval catch-up is disabled. Startup catch-up and fixed schedules remain active.");
   }
 };
 

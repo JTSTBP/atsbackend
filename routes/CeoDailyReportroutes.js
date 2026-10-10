@@ -184,6 +184,34 @@ router.get("/history/:id", async (req, res) => {
   }
 });
 
+router.delete("/history/bulk", async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (ids.length === 0) {
+      return res.status(400).json({ success: false, message: "No report history selected" });
+    }
+
+    const result = await CeoDailyReportLog.deleteMany({ _id: { $in: ids } });
+    res.json({
+      success: true,
+      message: "Selected report history cleared",
+      deletedCount: result.deletedCount || 0,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.delete("/history/:id", async (req, res) => {
+  try {
+    const log = await CeoDailyReportLog.findByIdAndDelete(req.params.id);
+    if (!log) return res.status(404).json({ success: false, message: "Report not found" });
+    res.json({ success: true, message: "Report history cleared" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.post("/history/:id/resend", async (req, res) => {
   try {
     const existing = await CeoDailyReportLog.findById(req.params.id);

@@ -12,6 +12,7 @@ const ACTIVE_JOB_STATUSES = ["Open"];
 const BASE_STATUS_COLUMNS = ["Applied", "Screened", "Interview", "Shortlisted", "Selected", "Rejected", "Joined"];
 
 const pad = (value) => String(value).padStart(2, "0");
+const getAutomaticDeliveryKey = (reportDate, slot) => `${REPORT_TYPE}:${reportDate}:${slot}:automatic`;
 
 const escapeHtml = (value) => String(value ?? "")
   .replace(/&/g, "&amp;")
@@ -679,9 +680,13 @@ const sendCeoDailyReport = async ({ slot = "12PM", force = false, test = false, 
   const recipients = normalizeList(settings.emailRecipients.length ? settings.emailRecipients : process.env.CEO_DAILY_REPORT_RECIPIENTS);
   const ccRecipients = normalizeList(settings.ccRecipients);
 
-  const log = new CeoDailyReportLog({
+  const isAutomaticSend = !force && !test;
+  const deliveryKey = isAutomaticSend ? getAutomaticDeliveryKey(data.period.reportDate, slot) : undefined;
+
+  const logPayload = {
     reportDate: data.period.reportDate,
     reportSlot: slot,
+    deliveryKey,
     generatedAt: new Date(),
     periodStart: data.period.start,
     periodEnd: data.period.end,
@@ -694,7 +699,26 @@ const sendCeoDailyReport = async ({ slot = "12PM", force = false, test = false, 
     reportData: data,
     triggeredBy,
     emailStatus: recipients.length ? "pending" : "not_configured",
-  });
+  };
+
+  let log = new CeoDailyReportLog(logPayload);
+
+  if (isAutomaticSend) {
+    try {
+      log = await CeoDailyReportLog.create(logPayload);
+    } catch (error) {
+      if (error?.code !== 11000) {
+        throw error;
+      }
+
+      const existingLog = await CeoDailyReportLog.findOne({ deliveryKey });
+      return {
+        skipped: true,
+        reason: `${slot} report is already sent or currently being sent for ${data.period.reportDate}.`,
+        log: existingLog,
+      };
+    }
+  }
 
   if (recipients.length) {
     try {
@@ -714,10 +738,29 @@ const sendCeoDailyReport = async ({ slot = "12PM", force = false, test = false, 
   }
 
   log.status = log.emailStatus === "sent" ? "success" : "failed";
+  if (isAutomaticSend && log.emailStatus !== "sent") {
+    log.deliveryKey = undefined;
+  }
 
   let savedLog = log;
   try {
-    await log.save();
+    if (isAutomaticSend) {
+      const updatePayload = log.toObject();
+      delete updatePayload._id;
+      delete updatePayload.__v;
+      delete updatePayload.createdAt;
+
+      savedLog = await CeoDailyReportLog.findByIdAndUpdate(
+        log._id,
+        {
+          $set: updatePayload,
+          ...(log.deliveryKey ? {} : { $unset: { deliveryKey: "" } }),
+        },
+        { new: true }
+      );
+    } else {
+      savedLog = await log.save();
+    }
   } catch (error) {
     const isDuplicateSentLog = error?.code === 11000 && log.emailStatus === "sent";
     if (!isDuplicateSentLog) {

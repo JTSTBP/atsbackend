@@ -18,6 +18,11 @@ const CeoDailyReportLogSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    deliveryKey: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
     generatedAt: {
       type: Date,
       default: Date.now,
