@@ -44,7 +44,7 @@ router.post("/", async (req, res) => {
 // 📋 Get All Users (with Pagination & Filtering)
 router.get("/", async (req, res) => {
   try {
-    const { page, limit, search, role, isAdmin, reporter } = req.query;
+    const { page, limit, search, role, isAdmin, reporter, disabled } = req.query;
 
     // Build Query
     const query = {};
@@ -59,9 +59,11 @@ router.get("/", async (req, res) => {
       ];
     }
     
-    // If any filter is applied (search, role, reporter), exclude disabled users
-    // as per user request: "whenver admin try to filter any one dont show disable users list"
-    if (search || reporter) {
+    // If disabled filter is true, get only disabled users
+    // Otherwise, if any other filter is applied (search, role, reporter), exclude disabled users
+    if (disabled === 'true') {
+      query.isDisabled = true;
+    } else if (search || reporter) {
       query.isDisabled = { $ne: true };
     }
 
