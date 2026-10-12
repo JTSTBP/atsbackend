@@ -31,6 +31,7 @@ const candidateSchema = new mongoose.Schema(
         "Rejected",
         "Dropped",
         "Hold",
+        "Not responding",
       ],
       default: "New",
     },

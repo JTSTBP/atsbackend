@@ -87,6 +87,15 @@ const sourcedCandidateSchema = new mongoose.Schema(
     additionalInfo: {
       type: mongoose.Schema.Types.Mixed,
       default: null,
+    },
+    isDuplicate: {
+      type: Boolean,
+      default: false,
+    },
+    originalCandidateId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SourcedCandidate",
+      default: null,
     }
   },
   { timestamps: true }

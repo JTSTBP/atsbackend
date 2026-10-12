@@ -119,13 +119,11 @@ const assertCandidateAccess = async (req, candidateId) => {
       path: "requirementId",
       populate: { path: "clientId", select: "companyName name clientName" },
     })
+    .populate("recruiterId", "name email designation")
     .lean();
   if (!candidate || !candidate.requirementId) return { candidate: null, job: null };
   const job = await assertJobAccess(req, candidate.requirementId._id || candidate.requirementId);
   if (!job) return { candidate: null, job: null };
-  if (!canSeeAllFollowUps(req.user) && toId(candidate.recruiterId) !== toId(req.user._id)) {
-    return { candidate: null, job: null };
-  }
   return { candidate, job };
 };
 
@@ -139,8 +137,39 @@ const buildCandidateSummary = (candidate, extras = {}) => ({
   resumeUrl: getSignedUrl(candidate.resumeFileUrl || candidate.resumeUrl),
   status: candidate.status || "Sourced",
   createdAt: candidate.createdAt,
+  recruiterId: candidate.recruiterId?._id || candidate.recruiterId,
+  addedBy: candidate.recruiterId ? {
+    _id: candidate.recruiterId._id || candidate.recruiterId,
+    name: candidate.recruiterId.name || "Unknown User",
+    email: candidate.recruiterId.email || "",
+    designation: candidate.recruiterId.designation || "",
+  } : null,
+  isDuplicate: candidate.isDuplicate || false,
+  originalCandidateId: candidate.originalCandidateId || null,
   ...extras,
 });
+
+const buildPhoneRegex = (phoneStr) => {
+  if (!phoneStr) return null;
+  const digits = String(phoneStr).replace(/\D/g, "");
+  if (digits.length >= 10) {
+    return new RegExp(`${digits.slice(-10)}$`);
+  }
+  return new RegExp(escapeRegex(String(phoneStr).trim()), "i");
+};
+
+const buildCandidateMatchConditions = (email, phone) => {
+  const or = [];
+  const cleanEmail = String(email || "").trim();
+  if (cleanEmail) {
+    or.push({ email: new RegExp(`^${escapeRegex(cleanEmail)}$`, "i") });
+  }
+  const phoneRegex = buildPhoneRegex(phone);
+  if (phoneRegex) {
+    or.push({ phoneNumber: phoneRegex });
+  }
+  return or;
+};
 
 const buildJobSummary = (job, counts = {}) => ({
   _id: job._id,
@@ -172,26 +201,139 @@ const templateVariables = (candidate, job, recruiter, extras = {}) => ({
 
 const renderTemplate = (text, variables) => String(text || "").replace(/\{\{(\w+)\}\}/g, (_, key) => variables[key] || "");
 
+const escapeHtml = (value = "") => String(value)
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;")
+  .replace(/'/g, "&#039;");
+
+const getPublicBaseUrl = () => {
+  const configured = process.env.PUBLIC_BASE_URL || process.env.BACKEND_PUBLIC_URL || process.env.APP_URL || process.env.FRONTEND_URL || "";
+  return String(configured).replace(/\/$/, "");
+};
+
+const getCompanyLogoUrl = () => {
+  const explicitLogo = process.env.COMPANY_LOGO_URL || process.env.EMAIL_LOGO_URL || "";
+  if (explicitLogo) return explicitLogo;
+  const baseUrl = getPublicBaseUrl();
+  return baseUrl ? `${baseUrl}/uploads/logos/logo-1772087065032-examle.jpg` : "";
+};
+
+const toPlainText = (paragraphs) => paragraphs.filter(Boolean).join("\n\n");
+
+const buildEmailHtml = ({ subject, eyebrow, paragraphs, ctaText, signatureName, vars }) => {
+  const logoUrl = getCompanyLogoUrl();
+  const safeSubject = escapeHtml(subject);
+  const safeEyebrow = escapeHtml(eyebrow || "Recruitment Follow-up");
+  const details = [
+    ["Role", vars.jobTitle],
+    ["Company", vars.companyName],
+    ["Location", vars.location],
+    ["Experience", vars.experience],
+    ["Compensation", vars.salary],
+  ].filter(([, value]) => value);
+
+  return `
+    <div style="margin:0;padding:0;background:#f4f7fb;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#f4f7fb;padding:24px 0;">
+        <tr>
+          <td align="center" style="padding:24px 12px;">
+            <table role="presentation" width="640" cellspacing="0" cellpadding="0" style="width:100%;max-width:640px;border-collapse:collapse;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #e2e8f0;box-shadow:0 18px 40px rgba(15,23,42,0.08);">
+              <tr>
+                <td style="background:linear-gradient(135deg,#0f172a 0%,#1d4ed8 58%,#0f766e 100%);padding:26px 30px;color:#ffffff;">
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+                    <tr>
+                      <td style="vertical-align:middle;">
+                        ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Jobs Territory" width="148" style="display:block;max-width:148px;height:auto;background:#ffffff;border-radius:10px;padding:8px;" />` : `<div style="font-size:22px;font-weight:800;letter-spacing:.3px;">Jobs Territory</div>`}
+                      </td>
+                      <td align="right" style="vertical-align:middle;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#dbeafe;">
+                        ${safeEyebrow}
+                      </td>
+                    </tr>
+                  </table>
+                  <h1 style="margin:26px 0 0;font-size:28px;line-height:1.2;font-weight:800;color:#ffffff;">${safeSubject}</h1>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:30px;">
+                  ${paragraphs.map((paragraph) => `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#334155;">${escapeHtml(paragraph).replace(/\n/g, "<br/>")}</p>`).join("")}
+                  ${details.length ? `
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin:22px 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+                      ${details.map(([label, value]) => `
+                        <tr>
+                          <td style="width:34%;padding:12px 16px;border-bottom:1px solid #e2e8f0;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#64748b;">${escapeHtml(label)}</td>
+                          <td style="padding:12px 16px;border-bottom:1px solid #e2e8f0;font-size:14px;font-weight:700;color:#0f172a;">${escapeHtml(value)}</td>
+                        </tr>
+                      `).join("")}
+                    </table>
+                  ` : ""}
+                  ${ctaText ? `<div style="margin:24px 0;"><span style="display:inline-block;background:#2563eb;color:#ffffff;border-radius:10px;padding:12px 18px;font-size:14px;font-weight:800;">${escapeHtml(ctaText)}</span></div>` : ""}
+                  <p style="margin:24px 0 0;font-size:15px;line-height:1.7;color:#334155;">Regards,<br/><strong>${escapeHtml(signatureName)}</strong><br/><span style="color:#64748b;">Jobs Territory Recruitment Team</span></p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+};
+
+const makeEmailTemplate = ({ label, subject, eyebrow, paragraphs, ctaText, vars }) => ({
+  label,
+  subject,
+  body: toPlainText([...paragraphs, `Regards,\n${vars.recruiterName}\nJobs Territory Recruitment Team`]),
+  htmlBody: buildEmailHtml({ subject, eyebrow, paragraphs, ctaText, signatureName: vars.recruiterName, vars }),
+});
+
 const makeGeneratedTemplates = (channel, category, candidate, job, recruiter) => {
   const vars = templateVariables(candidate, job, recruiter);
   const baseSubject = `${vars.jobTitle} opportunity - ${vars.companyName}`;
   if (channel === "EMAIL") {
+    const noAnswer = category === "No Answer";
+    const callback = category === "Call Back";
     return [
-      {
-        label: "Professional",
-        subject: category === "No Answer" ? `Following up on ${vars.jobTitle}` : baseSubject,
-        body: `Hi ${vars.candidateName},\n\nI tried reaching you regarding the ${vars.jobTitle} opportunity with ${vars.companyName} in ${vars.location}. Please let me know a convenient time to connect and discuss the role.\n\nRegards,\n${vars.recruiterName}`,
-      },
-      {
-        label: "Short",
-        subject: `Quick follow-up: ${vars.jobTitle}`,
-        body: `Hi ${vars.candidateName},\n\nAre you available for a quick call about the ${vars.jobTitle} role? Please share a suitable time.\n\nThanks,\n${vars.recruiterName}`,
-      },
-      {
-        label: "Friendly",
+      makeEmailTemplate({
+        label: "Professional Branded",
+        subject: noAnswer ? `Following up on the ${vars.jobTitle} opportunity` : baseSubject,
+        eyebrow: "Opportunity Follow-up",
+        ctaText: "Reply with your availability",
+        vars,
+        paragraphs: [
+          `Hi ${vars.candidateName},`,
+          noAnswer
+            ? `I tried reaching you regarding the ${vars.jobTitle} opportunity with ${vars.companyName}. I wanted to share the key details and understand whether this role aligns with your current career plans.`
+            : `We are working on a ${vars.jobTitle} opportunity with ${vars.companyName}, and your profile looks relevant for the requirement.`,
+          `Please share a convenient time for a brief discussion. I will walk you through the role, expectations, location, compensation details and next steps.`,
+        ],
+      }),
+      makeEmailTemplate({
+        label: "Executive Summary",
+        subject: `Role details for ${vars.jobTitle} - ${vars.companyName}`,
+        eyebrow: "Role Snapshot",
+        ctaText: "Confirm interest",
+        vars,
+        paragraphs: [
+          `Hello ${vars.candidateName},`,
+          `Sharing a concise overview of the ${vars.jobTitle} opening with ${vars.companyName}. Based on the available information, this could be a strong fit for your background.`,
+          callback
+            ? `As discussed, please confirm a suitable time to reconnect so we can take this forward without delay.`
+            : `If you are open to exploring this opportunity, please reply with your updated availability and any key expectations we should keep in mind.`,
+        ],
+      }),
+      makeEmailTemplate({
+        label: "Warm Follow-up",
         subject: `Can we connect about ${vars.jobTitle}?`,
-        body: `Hello ${vars.candidateName},\n\nHope you are doing well. I wanted to connect with you about a ${vars.jobTitle} opening at ${vars.companyName}. Please reply with a good time to talk.\n\nBest,\n${vars.recruiterName}`,
-      },
+        eyebrow: "Candidate Connect",
+        ctaText: "Schedule a quick call",
+        vars,
+        paragraphs: [
+          `Hi ${vars.candidateName},`,
+          `Hope you are doing well. I am reaching out from Jobs Territory about a ${vars.jobTitle} opening with ${vars.companyName}.`,
+          `I would be happy to share the complete job description and answer any questions you may have. Please let me know when you would be comfortable speaking for a few minutes.`,
+        ],
+      }),
     ];
   }
 
@@ -322,17 +464,149 @@ router.get("/requirements/:requirementId", async (req, res) => {
   }
 });
 
+router.get("/requirements/:requirementId/candidates/check-duplicate", async (req, res) => {
+  try {
+    const job = await assertJobAccess(req, req.params.requirementId);
+    if (!job) return res.status(404).json({ success: false, message: "Requirement not found" });
+
+    const { email = "", phone = "" } = req.query;
+    const matchConditions = buildCandidateMatchConditions(email, phone);
+    if (matchConditions.length === 0) {
+      return res.json({ success: true, hasDuplicate: false, duplicates: [] });
+    }
+
+    const duplicates = await SourcedCandidate.find({ $or: matchConditions })
+      .populate("recruiterId", "name email designation")
+      .populate("requirementId", "title")
+      .sort({ createdAt: 1 })
+      .lean();
+
+    const formatted = duplicates.map((d) => ({
+      _id: d._id,
+      name: d.name || "Candidate",
+      email: d.email,
+      phone: d.phoneNumber,
+      createdAt: d.createdAt,
+      isSameRequirement: toId(d.requirementId?._id || d.requirementId) === toId(job._id),
+      isSameRecruiter: toId(d.recruiterId?._id || d.recruiterId) === toId(req.user._id),
+      requirementTitle: d.requirementId?.title || "Requirement",
+      addedBy: {
+        _id: d.recruiterId?._id || d.recruiterId,
+        name: d.recruiterId?.name || "Unknown User",
+        email: d.recruiterId?.email || "",
+        designation: d.recruiterId?.designation || "",
+      },
+    }));
+
+    res.json({
+      success: true,
+      hasDuplicate: formatted.length > 0,
+      duplicates: formatted,
+    });
+  } catch (error) {
+    console.error("Check duplicate error:", error);
+    res.status(500).json({ success: false, message: "Failed to check duplicate" });
+  }
+});
+
 router.get("/requirements/:requirementId/candidates", async (req, res) => {
   try {
     const job = await assertJobAccess(req, req.params.requirementId);
     if (!job) return res.status(404).json({ success: false, message: "Requirement not found" });
-    const candidates = await SourcedCandidate.find({ requirementId: job._id, ...(canSeeAllFollowUps(req.user) ? {} : { recruiterId: req.user._id }) }).sort({ createdAt: -1 }).lean();
-    const snapshot = await getCandidateCommunicationSnapshot(candidates.map((candidate) => candidate._id), canSeeAllFollowUps(req.user) ? null : req.user._id);
+
+    const candidates = await SourcedCandidate.find({ requirementId: job._id })
+      .populate("recruiterId", "name email designation")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const candidateIds = candidates.map((c) => c._id);
+    const snapshot = await getCandidateCommunicationSnapshot(candidateIds, null);
+
+    const emails = candidates.map((c) => c.email).filter(Boolean);
+    const phones = candidates.map((c) => c.phoneNumber).filter(Boolean);
+
+    let allDuplicates = [];
+    if (emails.length > 0 || phones.length > 0) {
+      const or = [];
+      if (emails.length > 0) {
+        or.push({ email: { $in: emails.map((e) => new RegExp(`^${escapeRegex(e.trim())}$`, "i")) } });
+      }
+      if (phones.length > 0) {
+        const phoneRegexes = phones.map((p) => buildPhoneRegex(p)).filter(Boolean);
+        if (phoneRegexes.length > 0) {
+          or.push({ phoneNumber: { $in: phoneRegexes } });
+        }
+      }
+      if (or.length > 0) {
+        allDuplicates = await SourcedCandidate.find({ $or: or })
+          .populate("recruiterId", "name email designation")
+          .populate("requirementId", "title")
+          .sort({ createdAt: 1 })
+          .lean();
+      }
+    }
+
+    const enrichedCandidates = candidates.map((candidate) => {
+      const candEmail = String(candidate.email || "").toLowerCase().trim();
+      const candDigits = String(candidate.phoneNumber || "").replace(/\D/g, "");
+      const candLast10 = candDigits.length >= 10 ? candDigits.slice(-10) : candDigits;
+
+      const matches = allDuplicates.filter((other) => {
+        if (toId(other._id) === toId(candidate._id)) return false;
+        const otherEmail = String(other.email || "").toLowerCase().trim();
+        const otherDigits = String(other.phoneNumber || "").replace(/\D/g, "");
+        const otherLast10 = otherDigits.length >= 10 ? otherDigits.slice(-10) : otherDigits;
+
+        const emailMatch = Boolean(candEmail && otherEmail && candEmail === otherEmail);
+        const phoneMatch = Boolean(candLast10 && otherLast10 && candLast10 === otherLast10);
+        return emailMatch || phoneMatch;
+      });
+
+      const hasDuplicates = matches.length > 0;
+      const allGroup = [candidate, ...matches].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      const isOriginal = allGroup[0] && toId(allGroup[0]._id) === toId(candidate._id);
+      const originalCandidate = allGroup[0];
+
+      const duplicateProfiles = matches.map((m) => ({
+        _id: m._id,
+        name: m.name || "Candidate",
+        email: m.email,
+        phone: m.phoneNumber,
+        createdAt: m.createdAt,
+        isSameRequirement: toId(m.requirementId?._id || m.requirementId) === toId(job._id),
+        requirementTitle: m.requirementId?.title || "Requirement",
+        addedBy: {
+          _id: m.recruiterId?._id || m.recruiterId,
+          name: m.recruiterId?.name || "Unknown User",
+          email: m.recruiterId?.email || "",
+          designation: m.recruiterId?.designation || "",
+        },
+      }));
+
+      return buildCandidateSummary(candidate, {
+        isOwner: toId(candidate.recruiterId?._id || candidate.recruiterId) === toId(req.user._id),
+        isDuplicate: hasDuplicates,
+        isOriginal: hasDuplicates ? isOriginal : false,
+        duplicateCount: hasDuplicates ? allGroup.length : 1,
+        duplicateProfiles,
+        originalAddedBy: hasDuplicates && !isOriginal ? {
+          _id: originalCandidate?.recruiterId?._id || originalCandidate?.recruiterId,
+          name: originalCandidate?.recruiterId?.name || "Unknown User",
+          email: originalCandidate?.recruiterId?.email || "",
+          createdAt: originalCandidate?.createdAt,
+        } : null,
+        ...(snapshot.get(String(candidate._id)) || {}),
+      });
+    });
+
     res.json({
       success: true,
-      candidates: candidates.map((candidate) => buildCandidateSummary(candidate, snapshot.get(String(candidate._id)) || {})),
+      candidates: enrichedCandidates,
     });
   } catch (error) {
+    console.error("Follow-up candidates load error:", error);
     res.status(500).json({ success: false, message: "Failed to load candidates" });
   }
 });
@@ -353,33 +627,98 @@ router.post("/requirements/:requirementId/candidates", upload.single("resume"), 
       return res.status(400).json({ success: false, message: "Invalid candidate email" });
     }
 
-    const duplicate = await SourcedCandidate.findOne({
-      requirementId: job._id,
-      $or: [
-        { email },
-        { phoneNumber: phone },
-      ],
-    }).lean();
-    if (duplicate) {
-      return res.status(409).json({ success: false, message: "Candidate already exists for this requirement", duplicateCandidate: buildCandidateSummary(duplicate) });
+    const cleanEmail = email.trim();
+    const cleanPhone = phone.trim();
+    const matchConditions = buildCandidateMatchConditions(cleanEmail, cleanPhone);
+
+    const existingCandidates = await SourcedCandidate.find({ $or: matchConditions })
+      .populate("recruiterId", "name email designation")
+      .populate("requirementId", "title")
+      .sort({ createdAt: 1 })
+      .lean();
+
+    const duplicateByCurrentUserInSameJob = existingCandidates.find(
+      (c) => toId(c.requirementId?._id || c.requirementId) === toId(job._id) &&
+             toId(c.recruiterId?._id || c.recruiterId) === toId(req.user._id)
+    );
+
+    if (duplicateByCurrentUserInSameJob) {
+      return res.status(400).json({
+        success: false,
+        message: "You have already added this candidate profile for this requirement.",
+        existingCandidate: buildCandidateSummary(duplicateByCurrentUserInSameJob),
+      });
     }
+
+    const isDuplicate = existingCandidates.length > 0;
+    const earliestCandidate = isDuplicate ? existingCandidates[0] : null;
+    const previousAdderName = earliestCandidate?.recruiterId?.name || "another user";
 
     const candidate = await SourcedCandidate.create({
       requirementId: job._id,
       recruiterId: req.user._id,
       resumeFileUrl: req.file.location || req.file.path,
-      name: candidateName,
-      email,
-      phoneNumber: phone,
+      name: candidateName.trim(),
+      email: cleanEmail,
+      phoneNumber: cleanPhone,
       sourceType: "Follow-up Upload",
+      isDuplicate: isDuplicate,
+      originalCandidateId: earliestCandidate ? earliestCandidate._id : null,
     });
-    logActivity(req.user._id, "created", "source-candidate", "Sourced candidate added from Follow-ups", candidate._id, "SourceCandidate", {
+
+    if (isDuplicate) {
+      await SourcedCandidate.updateMany(
+        { _id: { $in: existingCandidates.map((c) => c._id) } },
+        { $set: { isDuplicate: true } }
+      );
+    }
+
+    const activityDesc = isDuplicate
+      ? `Duplicate candidate profile added by ${req.user.name} (Previously added by ${previousAdderName})`
+      : "Sourced candidate added from Follow-ups";
+
+    logActivity(req.user._id, "created", "source-candidate", activityDesc, candidate._id, "SourceCandidate", {
       actionType: "candidate_created",
       jobId: job._id,
       performedByRole: req.user.designation,
-      metadata: { source: "recruiter_followups", sourceCandidateId: candidate._id },
+      metadata: {
+        source: "recruiter_followups",
+        sourceCandidateId: candidate._id,
+        isDuplicate,
+        previouslyAddedBy: previousAdderName,
+        originalCandidateId: earliestCandidate?._id,
+      },
     });
-    res.status(201).json({ success: true, candidate: buildCandidateSummary(candidate.toObject()) });
+
+    const populatedCandidate = await SourcedCandidate.findById(candidate._id)
+      .populate("recruiterId", "name email designation")
+      .lean();
+
+    const formattedPrevious = existingCandidates.map((c) => ({
+      _id: c._id,
+      name: c.name || "Candidate",
+      email: c.email,
+      phone: c.phoneNumber,
+      createdAt: c.createdAt,
+      requirementTitle: c.requirementId?.title || "Requirement",
+      addedBy: {
+        _id: c.recruiterId?._id || c.recruiterId,
+        name: c.recruiterId?.name || "Unknown User",
+        email: c.recruiterId?.email || "",
+        designation: c.recruiterId?.designation || "",
+      },
+    }));
+
+    res.status(201).json({
+      success: true,
+      message: isDuplicate
+        ? `Candidate profile added! Note: This profile was already added by ${previousAdderName}.`
+        : "Candidate added successfully",
+      isDuplicate,
+      previouslyAddedBy: previousAdderName,
+      previousProfiles: formattedPrevious,
+      candidate: buildCandidateSummary(populatedCandidate, { isOwner: true }),
+    });
   } catch (error) {
     console.error("Follow-up candidate create error:", error);
     res.status(500).json({ success: false, message: "Failed to add candidate" });
@@ -443,7 +782,7 @@ router.post("/candidates/:candidateId/calls", async (req, res) => {
 router.get("/candidates/:candidateId/calls", async (req, res) => {
   const { candidate } = await assertCandidateAccess(req, req.params.candidateId);
   if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
-  const calls = await CallLog.find({ candidateId: candidate._id, ...ownerScope(req) }).sort({ createdAt: -1 }).lean();
+  const calls = await CallLog.find({ candidateId: candidate._id }).sort({ createdAt: -1 }).lean();
   res.json({ success: true, calls });
 });
 
@@ -472,7 +811,7 @@ router.post("/candidates/:candidateId/follow-ups", async (req, res) => {
 router.get("/candidates/:candidateId/follow-ups", async (req, res) => {
   const { candidate } = await assertCandidateAccess(req, req.params.candidateId);
   if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
-  const followUps = await FollowUp.find({ candidateId: candidate._id, ...ownerScope(req) }).sort({ dueDate: 1, dueTime: 1 }).lean();
+  const followUps = await FollowUp.find({ candidateId: candidate._id }).sort({ dueDate: 1, dueTime: 1 }).lean();
   res.json({ success: true, followUps });
 });
 
@@ -536,7 +875,7 @@ router.post("/candidates/:candidateId/email/send", async (req, res) => {
     const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
     if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
     const recipient = req.body.recipient || getCandidateField(candidate, ["email", "Email"]);
-    const { subject, body, idempotencyKey } = req.body;
+    const { subject, body, htmlBody, idempotencyKey } = req.body;
     if (!recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) return res.status(400).json({ success: false, message: "Invalid candidate email" });
     if (!subject || !body) return res.status(400).json({ success: false, message: "Subject and body are required" });
     if (idempotencyKey) {
@@ -560,7 +899,7 @@ router.post("/candidates/:candidateId/email/send", async (req, res) => {
         from: req.user.email,
         to: recipient,
         subject,
-        html: body.replace(/\n/g, "<br/>"),
+        html: htmlBody || body.replace(/\n/g, "<br/>"),
         text: body,
         replyTo: req.user.email,
       });
