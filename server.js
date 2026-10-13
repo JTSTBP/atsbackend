@@ -21,10 +21,12 @@ const returnInvoiceRoutes = require("./routes/ReturnInvoiceroutes");
 const sourceCandidateRoutes = require("./routes/SourceCandidateRoutes");
 const statementUploadRoutes = require("./routes/StatementUploadroutes");
 const emailDiagnosticsRoutes = require("./routes/EmailDiagnosticsroutes");
+const emailSequenceWebhookRoutes = require("./routes/EmailSequenceWebhookroutes");
 const recruiterFollowupRoutes = require("./routes/RecruiterFollowuproutes");
 const { startMonthlyAttendanceScheduler } = require("./schedulers/monthlyAttendanceScheduler");
 const ceoDailyReportRoutes = require("./routes/CeoDailyReportroutes");
 const { startCeoDailyReportScheduler } = require("./schedulers/ceoDailyReportScheduler");
+const { startEmailSequenceWorker } = require("./services/emailSequenceWorker");
 
 // Initialize Express app
 const app = express();
@@ -53,6 +55,7 @@ app.use("/api/return-invoices", returnInvoiceRoutes);
 app.use("/api/source-candidates", sourceCandidateRoutes);
 app.use("/api/statements", statementUploadRoutes);
 app.use("/api/email", emailDiagnosticsRoutes);
+app.use("/api/email-sequences", emailSequenceWebhookRoutes);
 app.use("/api/recruiter/follow-ups", recruiterFollowupRoutes);
 app.use("/api/ceo-daily-reports", ceoDailyReportRoutes);
 
@@ -85,6 +88,7 @@ const connectDB = async () => {
     );
     startMonthlyAttendanceScheduler();
     startCeoDailyReportScheduler();
+    startEmailSequenceWorker();
   } catch (error) {
     console.error("❌ MongoDB Connection Error:", error.message);
     

@@ -12,6 +12,7 @@ const { protect } = require("../middleware/authMiddleware");
 const logActivity = require("./logactivity");
 const { sendMail, formatEmailErrorResponse } = require("../services/emailService");
 const { sendWhatsAppMessage } = require("../services/whatsappService");
+const { runEmailSequenceWorkerOnce, scheduleForStep } = require("../services/emailSequenceWorker");
 const { getSignedUrl } = require("../config/s3Config");
 
 const router = express.Router();
@@ -169,6 +170,22 @@ const buildCandidateMatchConditions = (email, phone) => {
     or.push({ phoneNumber: phoneRegex });
   }
   return or;
+};
+
+const normalizeWhatsAppPhone = (value = "") => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  let digits = raw.replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.length === 10) digits = `91${digits}`;
+  if (digits.length === 11 && digits.startsWith("0")) digits = `91${digits.slice(1)}`;
+  return digits;
+};
+
+const buildWhatsAppUrl = (phone, body = "") => {
+  const normalizedPhone = normalizeWhatsAppPhone(phone);
+  if (!normalizedPhone) return "";
+  return `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(String(body || ""))}`;
 };
 
 const buildJobSummary = (job, counts = {}) => ({
@@ -351,6 +368,89 @@ const makeGeneratedTemplates = (channel, category, candidate, job, recruiter) =>
       body: `Hello ${vars.candidateName}, gentle reminder about the ${vars.jobTitle} opportunity. Please share your availability for a quick discussion.`,
     },
   ];
+};
+
+const makeDraftStudioTemplates = (candidate, job, recruiter) => {
+  const vars = templateVariables(candidate, job, recruiter);
+  const steps = [
+    {
+      label: "Email 1 - Introduction",
+      subject: `${vars.jobTitle} opportunity with ${vars.companyName}`,
+      eyebrow: "Opportunity Introduction",
+      ctaText: "Reply with availability",
+      paragraphs: [
+        `Hi ${vars.candidateName},`,
+        `I am reaching out from Jobs Territory about a ${vars.jobTitle} opportunity with ${vars.companyName}. Your profile appears relevant for the requirement, and I wanted to check whether you are open to exploring a new role.`,
+        `Please reply with a suitable time for a short conversation so I can share the role details, expectations and next steps.`,
+      ],
+    },
+    {
+      label: "Email 2 - Role Context",
+      subject: `More context on the ${vars.jobTitle} role`,
+      eyebrow: "Role Context",
+      ctaText: "Share your interest",
+      paragraphs: [
+        `Hi ${vars.candidateName},`,
+        `Following up with a little more context on the ${vars.jobTitle} opening. The role is connected to ${vars.companyName}${vars.location ? ` in ${vars.location}` : ""}, and we are aligning candidates based on experience, skills and availability.`,
+        `If this sounds relevant, please share your current availability and any expectations you would like us to keep in mind.`,
+      ],
+    },
+    {
+      label: "Email 3 - Recruiter Support",
+      subject: `Can I help with details for ${vars.jobTitle}?`,
+      eyebrow: "Recruiter Support",
+      ctaText: "Ask a question",
+      paragraphs: [
+        `Hello ${vars.candidateName},`,
+        `I wanted to make it easy for you to evaluate the ${vars.jobTitle} opportunity. I can walk you through the job description, interview process, compensation range and work location before you decide.`,
+        `Please let me know what information would help you assess the opportunity better.`,
+      ],
+    },
+    {
+      label: "Email 4 - Availability Check",
+      subject: `Checking your availability for a quick discussion`,
+      eyebrow: "Availability Check",
+      ctaText: "Confirm a time",
+      paragraphs: [
+        `Hi ${vars.candidateName},`,
+        `Just checking whether you had a chance to review my earlier notes about the ${vars.jobTitle} role with ${vars.companyName}.`,
+        `If you are interested, please send a convenient time today or tomorrow. If not, a short reply is completely fine and I will update our records accordingly.`,
+      ],
+    },
+    {
+      label: "Email 5 - Close the Loop",
+      subject: `Should I close this for now?`,
+      eyebrow: "Closing Follow-up",
+      ctaText: "Reply if interested",
+      paragraphs: [
+        `Hi ${vars.candidateName},`,
+        `I have not been able to connect with you regarding the ${vars.jobTitle} opportunity, so I will close the loop for now.`,
+        `If you would like to revisit this role or hear about similar opportunities later, please reply and I will be happy to help.`,
+      ],
+    },
+  ];
+  return steps.map((step, index) => ({
+    ...makeEmailTemplate({ ...step, vars }),
+    step: index,
+  }));
+};
+
+const sendEmailCommunication = async ({ communication, recruiter, recipient, subject, body, htmlBody }) => {
+  const result = await sendMail({
+    fromName: recruiter.name || "Jobs Territory",
+    from: recruiter.email,
+    to: recipient,
+    subject,
+    html: htmlBody || body.replace(/\n/g, "<br/>"),
+    text: body,
+    replyTo: recruiter.email,
+  });
+  communication.status = "sent";
+  communication.providerMessageId = result.messageId || result.traceId;
+  communication.sentAt = new Date();
+  communication.errorMessage = undefined;
+  await communication.save();
+  return communication;
 };
 
 const getCandidateCommunicationSnapshot = async (candidateIds, recruiterId) => {
@@ -855,6 +955,260 @@ router.patch("/:followUpId", async (req, res) => {
   }
 });
 
+router.get("/candidates/:candidateId/draft-studio", async (req, res) => {
+  try {
+    const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
+    if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
+    const allDrafts = await Communication.find({
+      candidateId: candidate._id,
+      requirementId: job._id,
+      recruiterId: req.user._id,
+      channel: "EMAIL",
+      sequenceId: { $type: "string" },
+    }).sort({ createdAt: -1 }).lean();
+    const currentSequenceId = allDrafts[0]?.sequenceId || "";
+    const drafts = currentSequenceId
+      ? allDrafts.filter((draft) => draft.sequenceId === currentSequenceId).sort((a, b) => (a.sequenceStep || 0) - (b.sequenceStep || 0))
+      : [];
+    const activeDrafts = drafts.filter((draft) => draft.status !== "stopped" || draft.sentAt);
+    const sent = activeDrafts.filter((draft) => draft.status === "sent").length;
+    const stopped = drafts.some((draft) => draft.status === "stopped" && !draft.sentAt);
+    const scheduled = activeDrafts.some((draft) => ["scheduled", "pending"].includes(draft.status) && draft.scheduledAt);
+    const reviewed = activeDrafts.length > 0 && activeDrafts.every((draft) => ["reviewed", "sent"].includes(draft.status));
+    res.json({
+      success: true,
+      candidate: buildCandidateSummary(candidate),
+      sequence: {
+        id: currentSequenceId,
+        status: stopped ? "Stopped" : sent >= 5 ? "Completed" : scheduled || sent > 0 ? "Active" : reviewed ? "Ready" : activeDrafts.length ? "Draft" : "Empty",
+        sent,
+        drafts: activeDrafts,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to load draft studio" });
+  }
+});
+
+router.post("/candidates/:candidateId/draft-studio/generate", async (req, res) => {
+  try {
+    const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
+    if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
+    const recipient = getCandidateField(candidate, ["email", "Email"]);
+    if (!recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) return res.status(400).json({ success: false, message: "Invalid candidate email" });
+    const existingDraft = await Communication.findOne({
+      candidateId: candidate._id,
+      requirementId: job._id,
+      recruiterId: req.user._id,
+      channel: "EMAIL",
+      sequenceId: { $type: "string" },
+      status: { $in: ["generated", "reviewed", "scheduled", "pending", "failed"] },
+    }).sort({ createdAt: -1 }).lean();
+    if (existingDraft) {
+      return res.status(409).json({ success: false, message: "A draft sequence already exists. Clear it before generating a new one." });
+    }
+    const sequenceId = `ats-${candidate._id}-${Date.now()}`;
+
+    const createdAt = new Date();
+    const drafts = await Communication.insertMany(makeDraftStudioTemplates(candidate, job, req.user).map((draft) => ({
+      candidateId: candidate._id,
+      requirementId: job._id,
+      recruiterId: req.user._id,
+      channel: "EMAIL",
+      recipient,
+      subject: draft.subject,
+      body: draft.body,
+      status: "generated",
+      sequenceId,
+      sequenceStep: draft.step,
+      scheduledAt: scheduleForStep(draft.step, createdAt),
+      idempotencyKey: `${sequenceId}-${draft.step}`,
+    })));
+
+    logActivity(req.user._id, "generated", "candidate-email-sequence", "Five-email draft studio generated", candidate._id, "SourceCandidate", {
+      actionType: "email_sequence_generated",
+      candidateId: candidate._id,
+      jobId: job._id,
+      performedByRole: req.user.designation,
+      metadata: { sequenceId },
+    });
+    res.json({ success: true, sequenceId, drafts });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to generate draft studio emails" });
+  }
+});
+
+router.patch("/candidates/:candidateId/draft-studio/:draftId", async (req, res) => {
+  try {
+    const { candidate } = await assertCandidateAccess(req, req.params.candidateId);
+    if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
+    const draft = await Communication.findOne({
+      _id: req.params.draftId,
+      candidateId: candidate._id,
+      recruiterId: req.user._id,
+      channel: "EMAIL",
+    });
+    if (!draft) return res.status(404).json({ success: false, message: "Draft not found" });
+    if (draft.status === "sent") return res.status(400).json({ success: false, message: "Sent emails cannot be edited" });
+    if (req.body.subject !== undefined) draft.subject = String(req.body.subject || "");
+    if (req.body.body !== undefined) draft.body = String(req.body.body || "");
+    if (req.body.scheduledAt !== undefined) {
+      draft.scheduledAt = req.body.scheduledAt ? new Date(req.body.scheduledAt) : undefined;
+    }
+    if (req.body.reviewed) {
+      draft.status = "reviewed";
+      draft.reviewedAt = new Date();
+    }
+    await draft.save();
+    res.json({ success: true, draft });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to update draft" });
+  }
+});
+
+router.post("/candidates/:candidateId/draft-studio/review", async (req, res) => {
+  try {
+    const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
+    if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
+    const drafts = Array.isArray(req.body.drafts) ? req.body.drafts : [];
+    if (drafts.length) {
+      for (const item of drafts) {
+        if (!item?._id) continue;
+        await Communication.updateOne({
+          _id: item._id,
+          candidateId: candidate._id,
+          requirementId: job._id,
+          recruiterId: req.user._id,
+          channel: "EMAIL",
+          sequenceId: req.body.sequenceId,
+          status: { $in: ["generated", "reviewed"] },
+        }, {
+          $set: {
+            subject: String(item.subject || ""),
+            body: String(item.body || ""),
+            scheduledAt: item.scheduledAt ? new Date(item.scheduledAt) : undefined,
+            status: "reviewed",
+            reviewedAt: new Date(),
+          },
+        });
+      }
+    } else {
+      await Communication.updateMany({
+        candidateId: candidate._id,
+        requirementId: job._id,
+        recruiterId: req.user._id,
+        channel: "EMAIL",
+        sequenceId: req.body.sequenceId,
+        status: "generated",
+      }, { $set: { status: "reviewed", reviewedAt: new Date() } });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to mark drafts reviewed" });
+  }
+});
+
+router.post("/candidates/:candidateId/draft-studio/start", async (req, res) => {
+  try {
+    const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
+    if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
+    const recipient = getCandidateField(candidate, ["email", "Email"]);
+    if (!recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) return res.status(400).json({ success: false, message: "Invalid candidate email" });
+    const drafts = await Communication.find({
+      candidateId: candidate._id,
+      requirementId: job._id,
+      recruiterId: req.user._id,
+      channel: "EMAIL",
+      sequenceId: req.body.sequenceId,
+      status: { $in: ["reviewed", "failed"] },
+    }).sort({ sequenceStep: 1 });
+    if (drafts.length === 0) return res.status(400).json({ success: false, message: "Review drafts before starting the sequence" });
+    const startedAt = new Date();
+    const scheduled = [];
+    for (const draft of drafts) {
+      if (!draft.subject || !draft.body) throw new Error("All drafts need subject and body");
+      draft.status = "scheduled";
+      draft.scheduledAt = draft.scheduledAt || scheduleForStep(draft.sequenceStep || 0, startedAt);
+      draft.errorMessage = undefined;
+      await draft.save();
+      scheduled.push(draft);
+    }
+    const workerResult = await runEmailSequenceWorkerOnce();
+    logActivity(req.user._id, "scheduled", "candidate-email-sequence", `Email sequence scheduled: ${scheduled.length} emails`, candidate._id, "SourceCandidate", {
+      actionType: "email_sequence_scheduled",
+      candidateId: candidate._id,
+      jobId: job._id,
+      performedByRole: req.user.designation,
+      metadata: { recipient, sequenceId: req.body.sequenceId, scheduled: scheduled.length, workerResult },
+    });
+    res.json({ success: true, scheduled, workerResult });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Email sequence scheduling failed", ...formatEmailErrorResponse(error) });
+  }
+});
+
+router.post("/candidates/:candidateId/draft-studio/stop", async (req, res) => {
+  try {
+    const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
+    if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
+    const result = await Communication.updateMany({
+      candidateId: candidate._id,
+      requirementId: job._id,
+      recruiterId: req.user._id,
+      channel: "EMAIL",
+      sequenceId: req.body.sequenceId,
+      status: { $in: ["generated", "reviewed", "scheduled", "failed"] },
+    }, { $set: { status: "stopped", stoppedAt: new Date(), stopReason: req.body.reason || "manual_stop" } });
+    logActivity(req.user._id, "stopped", "candidate-email-sequence", "Email sequence stopped", candidate._id, "SourceCandidate", {
+      actionType: "email_sequence_stopped",
+      candidateId: candidate._id,
+      jobId: job._id,
+      performedByRole: req.user.designation,
+      metadata: { sequenceId: req.body.sequenceId, stopped: result.modifiedCount },
+    });
+    res.json({ success: true, stopped: result.modifiedCount });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to stop email sequence" });
+  }
+});
+
+router.delete("/candidates/:candidateId/draft-studio", async (req, res) => {
+  try {
+    const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
+    if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
+    if (!req.body.sequenceId) return res.status(400).json({ success: false, message: "Sequence id is required" });
+    const sentCount = await Communication.countDocuments({
+      candidateId: candidate._id,
+      requirementId: job._id,
+      recruiterId: req.user._id,
+      channel: "EMAIL",
+      sequenceId: req.body.sequenceId,
+      status: "sent",
+    });
+    if (sentCount > 0) {
+      return res.status(400).json({ success: false, message: "This sequence has sent emails. Use Stop instead of Clear." });
+    }
+    const result = await Communication.deleteMany({
+      candidateId: candidate._id,
+      requirementId: job._id,
+      recruiterId: req.user._id,
+      channel: "EMAIL",
+      sequenceId: req.body.sequenceId,
+      status: { $in: ["generated", "reviewed", "scheduled", "pending", "failed", "stopped"] },
+    });
+    logActivity(req.user._id, "deleted", "candidate-email-sequence", "Email draft sequence cleared", candidate._id, "SourceCandidate", {
+      actionType: "email_sequence_cleared",
+      candidateId: candidate._id,
+      jobId: job._id,
+      performedByRole: req.user.designation,
+      metadata: { sequenceId: req.body.sequenceId, deleted: result.deletedCount },
+    });
+    res.json({ success: true, deleted: result.deletedCount });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to clear email drafts" });
+  }
+});
+
 router.post("/candidates/:candidateId/email/generate", async (req, res) => {
   const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
   if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
@@ -945,9 +1299,13 @@ router.post("/candidates/:candidateId/whatsapp/send", async (req, res) => {
   try {
     const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
     if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
-    const recipient = req.body.recipient || getCandidateField(candidate, ["phoneNumber", "Phone", "phone", "Mobile", "mobile"]);
+    const rawRecipient = req.body.recipient || getCandidateField(candidate, ["phoneNumber", "Phone", "phone", "Mobile", "mobile"]);
+    const recipient = normalizeWhatsAppPhone(rawRecipient);
     const { body, idempotencyKey } = req.body;
     if (!recipient) return res.status(400).json({ success: false, message: "Candidate phone number is required" });
+    if (recipient.length < 11 || recipient.length > 15) {
+      return res.status(400).json({ success: false, message: "Enter a valid WhatsApp number with country code" });
+    }
     if (!body) return res.status(400).json({ success: false, message: "Message body is required" });
     if (idempotencyKey) {
       const existing = await Communication.findOne({ recruiterId: req.user._id, channel: "WHATSAPP", idempotencyKey });
@@ -981,7 +1339,13 @@ router.post("/candidates/:candidateId/whatsapp/send", async (req, res) => {
       communication.status = error.code === "WHATSAPP_PROVIDER_NOT_CONFIGURED" ? "not_configured" : "failed";
       communication.errorMessage = error.message;
       await communication.save();
-      res.status(503).json({ success: false, code: error.code || "WHATSAPP_SEND_FAILED", message: error.message, communication });
+      res.status(503).json({
+        success: false,
+        code: error.code || "WHATSAPP_SEND_FAILED",
+        message: error.message,
+        communication,
+        whatsappUrl: buildWhatsAppUrl(recipient, body),
+      });
     }
   } catch (error) {
     res.status(500).json({ success: false, message: "Failed to send WhatsApp message" });
