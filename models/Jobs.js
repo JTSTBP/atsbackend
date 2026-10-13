@@ -57,6 +57,12 @@ const jobSchema = new mongoose.Schema(
     leadRecruiter: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
 
     candidateFields: [candidateFieldSchema],
+    communicationTemplates: { type: [new mongoose.Schema({
+      channel: { type: String, enum: ["EMAIL", "WHATSAPP"], required: true },
+      label: { type: String, required: true, trim: true },
+      subject: { type: String, default: "" },
+      body: { type: String, required: true, trim: true },
+    })], default: [] },
     jdFile: { type: String }, // Path or URL to the uploaded Job Description document
     jdFileName: { type: String }, // Original file name of the Job Description document
   },

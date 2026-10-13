@@ -216,7 +216,10 @@ const templateVariables = (candidate, job, recruiter, extras = {}) => ({
   joiningDate: extras.joiningDate || "",
 });
 
-const renderTemplate = (text, variables) => String(text || "").replace(/\{\{(\w+)\}\}/g, (_, key) => variables[key] || "");
+const renderTemplate = (text, variables) => String(text || "").replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => {
+  const profileNameKeys = ["candidateName", "profileName", "name"];
+  return profileNameKeys.includes(key) ? variables.candidateName || "Candidate" : variables[key] || "";
+});
 
 const escapeHtml = (value = "") => String(value)
   .replace(/&/g, "&amp;")
@@ -474,7 +477,10 @@ const getCandidateCommunicationSnapshot = async (candidateIds, recruiterId) => {
   followUps.forEach((followUp) => {
     const bucket = byCandidate.get(String(followUp.candidateId));
     if (!bucket) return;
-    if (followUp.status === "Pending" && !bucket.nextFollowUp) bucket.nextFollowUp = followUp;
+    if (["Pending", "Overdue"].includes(followUp.status) && !bucket.nextFollowUp) bucket.nextFollowUp = followUp;
+    const previous = bucket.latestFollowUp;
+    const changedAt = item => new Date(item.updatedAt || item.createdAt || item.dueDate).getTime();
+    if (!previous || changedAt(followUp) > changedAt(previous)) bucket.latestFollowUp = followUp;
   });
   return byCandidate;
 };
@@ -601,7 +607,7 @@ router.get("/requirements/:requirementId/candidates/check-duplicate", async (req
     res.json({
       success: true,
       hasDuplicate: formatted.length > 0,
-      duplicates: formatted,
+      duplicates: req.user.designation === "Recruiter" ? formatted.map(d => ({ isSameRequirement: d.isSameRequirement, isSameRecruiter: d.isSameRecruiter })) : formatted,
     });
   } catch (error) {
     console.error("Check duplicate error:", error);
@@ -703,7 +709,7 @@ router.get("/requirements/:requirementId/candidates", async (req, res) => {
 
     res.json({
       success: true,
-      candidates: enrichedCandidates,
+      candidates: req.user.designation === "Recruiter" ? enrichedCandidates.map(({ duplicateProfiles, originalAddedBy, duplicateCount, isOriginal, ...candidate }) => candidate) : enrichedCandidates,
     });
   } catch (error) {
     console.error("Follow-up candidates load error:", error);
@@ -829,7 +835,7 @@ router.post("/candidates/:candidateId/calls", async (req, res) => {
   try {
     const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
     if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
-    const { callDate, callTime, status, outcome = "Other", notes = "", nextFollowUpDate, nextFollowUpTime, scheduleFollowUp, followUpType = "Call" } = req.body;
+    const { callDate, callTime, status, outcome = "Other", notes = "", nextFollowUpDate, nextFollowUpTime, scheduleFollowUp, followUpType = "Call", followUpRemarks } = req.body;
     if (!callDate || !callTime || !status) return res.status(400).json({ success: false, message: "Call date, time and status are required" });
 
     const call = await CallLog.create({
@@ -863,7 +869,7 @@ router.post("/candidates/:candidateId/calls", async (req, res) => {
         type: followUpType,
         dueDate: nextFollowUpDate,
         dueTime: nextFollowUpTime,
-        notes: notes || `Follow-up after call status: ${status}`,
+        notes: followUpRemarks !== undefined ? String(followUpRemarks).trim() : notes || `Follow-up after call status: ${status}`,
       });
     }
     logActivity(req.user._id, "created", "candidate-call", `Call logged: ${status}`, candidate._id, "SourceCandidate", {
@@ -963,7 +969,7 @@ router.get("/candidates/:candidateId/draft-studio", async (req, res) => {
       candidateId: candidate._id,
       requirementId: job._id,
       recruiterId: req.user._id,
-      channel: "EMAIL",
+      channel: req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL",
       sequenceId: { $type: "string" },
     }).sort({ createdAt: -1 }).lean();
     const currentSequenceId = allDrafts[0]?.sequenceId || "";
@@ -980,9 +986,10 @@ router.get("/candidates/:candidateId/draft-studio", async (req, res) => {
       candidate: buildCandidateSummary(candidate),
       sequence: {
         id: currentSequenceId,
-        status: stopped ? "Stopped" : sent >= 5 ? "Completed" : scheduled || sent > 0 ? "Active" : reviewed ? "Ready" : activeDrafts.length ? "Draft" : "Empty",
+        status: stopped ? "Stopped" : drafts.length > 0 && sent >= drafts.length ? "Completed" : scheduled || sent > 0 ? "Active" : reviewed ? "Ready" : activeDrafts.length ? "Draft" : "Empty",
         sent,
         drafts: activeDrafts,
+        templates: (job.communicationTemplates || []).filter(t => t.channel === (req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL")).map((t, index) => ({ label: t.label, _id: `template-${index}`, subject: renderTemplate(t.subject, templateVariables(candidate, job, req.user)), body: renderTemplate(t.body, templateVariables(candidate, job, req.user)) })),
       },
     });
   } catch (error) {
@@ -1000,7 +1007,7 @@ router.post("/candidates/:candidateId/draft-studio/generate", async (req, res) =
       candidateId: candidate._id,
       requirementId: job._id,
       recruiterId: req.user._id,
-      channel: "EMAIL",
+      channel: req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL",
       sequenceId: { $type: "string" },
       status: { $in: ["generated", "reviewed", "scheduled", "pending", "failed"] },
     }).sort({ createdAt: -1 }).lean();
@@ -1010,11 +1017,11 @@ router.post("/candidates/:candidateId/draft-studio/generate", async (req, res) =
     const sequenceId = `ats-${candidate._id}-${Date.now()}`;
 
     const createdAt = new Date();
-    const drafts = await Communication.insertMany(makeDraftStudioTemplates(candidate, job, req.user).map((draft) => ({
+    const drafts = await Communication.insertMany((job.communicationTemplates || []).filter(t => t.channel === "EMAIL").map((t, step) => ({ step, subject: renderTemplate(t.subject, templateVariables(candidate, job, req.user)), body: renderTemplate(t.body, templateVariables(candidate, job, req.user)) })).map((draft) => ({
       candidateId: candidate._id,
       requirementId: job._id,
       recruiterId: req.user._id,
-      channel: "EMAIL",
+      channel: req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL",
       recipient,
       subject: draft.subject,
       body: draft.body,
@@ -1046,7 +1053,7 @@ router.patch("/candidates/:candidateId/draft-studio/:draftId", async (req, res) 
       _id: req.params.draftId,
       candidateId: candidate._id,
       recruiterId: req.user._id,
-      channel: "EMAIL",
+      channel: req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL",
     });
     if (!draft) return res.status(404).json({ success: false, message: "Draft not found" });
     if (draft.status === "sent") return res.status(400).json({ success: false, message: "Sent emails cannot be edited" });
@@ -1079,7 +1086,7 @@ router.post("/candidates/:candidateId/draft-studio/review", async (req, res) => 
           candidateId: candidate._id,
           requirementId: job._id,
           recruiterId: req.user._id,
-          channel: "EMAIL",
+          channel: req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL",
           sequenceId: req.body.sequenceId,
           status: { $in: ["generated", "reviewed"] },
         }, {
@@ -1097,7 +1104,7 @@ router.post("/candidates/:candidateId/draft-studio/review", async (req, res) => 
         candidateId: candidate._id,
         requirementId: job._id,
         recruiterId: req.user._id,
-        channel: "EMAIL",
+        channel: req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL",
         sequenceId: req.body.sequenceId,
         status: "generated",
       }, { $set: { status: "reviewed", reviewedAt: new Date() } });
@@ -1112,21 +1119,20 @@ router.post("/candidates/:candidateId/draft-studio/start", async (req, res) => {
   try {
     const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
     if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
-    const recipient = getCandidateField(candidate, ["email", "Email"]);
-    if (!recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) return res.status(400).json({ success: false, message: "Invalid candidate email" });
-    const drafts = await Communication.find({
-      candidateId: candidate._id,
-      requirementId: job._id,
-      recruiterId: req.user._id,
-      channel: "EMAIL",
-      sequenceId: req.body.sequenceId,
-      status: { $in: ["reviewed", "failed"] },
-    }).sort({ sequenceStep: 1 });
-    if (drafts.length === 0) return res.status(400).json({ success: false, message: "Review drafts before starting the sequence" });
+    const channel = req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL";
+    const recipient = channel === "EMAIL" ? getCandidateField(candidate, ["email", "Email"]) : normalizeWhatsAppPhone(getCandidateField(candidate, ["phoneNumber", "Phone", "phone", "Mobile", "mobile"]));
+    if (!recipient || (channel === "EMAIL" ? !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient) : recipient.length < 11 || recipient.length > 15)) return res.status(400).json({ success: false, message: "Invalid candidate contact details" });
+    const existing = await Communication.findOne({ candidateId: candidate._id, requirementId: job._id, recruiterId: req.user._id, channel, sequenceId: { $type: "string" }, status: { $in: ["scheduled", "pending"] } });
+    if (existing) return res.status(409).json({ success: false, message: "A sequence is already active" });
+    const templates = (job.communicationTemplates || []).filter(t => t.channel === channel);
+    if (!templates.length || templates.some(t => !t.body.trim() || (channel === "EMAIL" && !t.subject.trim()))) return res.status(400).json({ success: false, message: "Add complete templates to this requirement before starting" });
+    const sequenceId = `ats-${candidate._id}-${channel}-${Date.now()}`;
+    const vars = templateVariables(candidate, job, req.user);
+    const drafts = await Communication.insertMany(templates.map((t, step) => ({ candidateId: candidate._id, requirementId: job._id, recruiterId: req.user._id, channel, recipient, subject: renderTemplate(t.subject, vars), body: renderTemplate(t.body, vars), status: "generated", sequenceId, sequenceStep: step, idempotencyKey: `${sequenceId}-${step}` })));
     const startedAt = new Date();
     const scheduled = [];
     for (const draft of drafts) {
-      if (!draft.subject || !draft.body) throw new Error("All drafts need subject and body");
+      if ((channel === "EMAIL" && !draft.subject) || !draft.body) throw new Error("All drafts need subject and body");
       draft.status = "scheduled";
       draft.scheduledAt = draft.scheduledAt || scheduleForStep(draft.sequenceStep || 0, startedAt);
       draft.errorMessage = undefined;
@@ -1139,7 +1145,7 @@ router.post("/candidates/:candidateId/draft-studio/start", async (req, res) => {
       candidateId: candidate._id,
       jobId: job._id,
       performedByRole: req.user.designation,
-      metadata: { recipient, sequenceId: req.body.sequenceId, scheduled: scheduled.length, workerResult },
+      metadata: { recipient, sequenceId, scheduled: scheduled.length, workerResult },
     });
     res.json({ success: true, scheduled, workerResult });
   } catch (error) {
@@ -1155,7 +1161,7 @@ router.post("/candidates/:candidateId/draft-studio/stop", async (req, res) => {
       candidateId: candidate._id,
       requirementId: job._id,
       recruiterId: req.user._id,
-      channel: "EMAIL",
+      channel: req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL",
       sequenceId: req.body.sequenceId,
       status: { $in: ["generated", "reviewed", "scheduled", "failed"] },
     }, { $set: { status: "stopped", stoppedAt: new Date(), stopReason: req.body.reason || "manual_stop" } });
@@ -1177,22 +1183,11 @@ router.delete("/candidates/:candidateId/draft-studio", async (req, res) => {
     const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
     if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
     if (!req.body.sequenceId) return res.status(400).json({ success: false, message: "Sequence id is required" });
-    const sentCount = await Communication.countDocuments({
-      candidateId: candidate._id,
-      requirementId: job._id,
-      recruiterId: req.user._id,
-      channel: "EMAIL",
-      sequenceId: req.body.sequenceId,
-      status: "sent",
-    });
-    if (sentCount > 0) {
-      return res.status(400).json({ success: false, message: "This sequence has sent emails. Use Stop instead of Clear." });
-    }
     const result = await Communication.deleteMany({
       candidateId: candidate._id,
       requirementId: job._id,
       recruiterId: req.user._id,
-      channel: "EMAIL",
+      channel: req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL",
       sequenceId: req.body.sequenceId,
       status: { $in: ["generated", "reviewed", "scheduled", "pending", "failed", "stopped"] },
     });
@@ -1213,7 +1208,7 @@ router.post("/candidates/:candidateId/email/generate", async (req, res) => {
   const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
   if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
   const category = EMAIL_CATEGORIES.includes(req.body.category) ? req.body.category : "Custom";
-  const templates = makeGeneratedTemplates("EMAIL", category, candidate, job, req.user);
+  const templates = (job.communicationTemplates || []).filter(t => t.channel === "EMAIL").map(t => ({ label: t.label, subject: renderTemplate(t.subject, templateVariables(candidate, job, req.user)), body: renderTemplate(t.body, templateVariables(candidate, job, req.user)) }));
   logActivity(req.user._id, "generated", "candidate-email", `Email templates generated: ${category}`, candidate._id, "SourceCandidate", {
     actionType: "email_generated",
     candidateId: candidate._id,
@@ -1284,7 +1279,7 @@ router.post("/candidates/:candidateId/whatsapp/generate", async (req, res) => {
   const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
   if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
   const category = WHATSAPP_CATEGORIES.includes(req.body.category) ? req.body.category : "Custom";
-  const templates = makeGeneratedTemplates("WHATSAPP", category, candidate, job, req.user);
+  const templates = (job.communicationTemplates || []).filter(t => t.channel === "WHATSAPP").map(t => ({ label: t.label, subject: renderTemplate(t.subject, templateVariables(candidate, job, req.user)), body: renderTemplate(t.body, templateVariables(candidate, job, req.user)) }));
   logActivity(req.user._id, "generated", "candidate-whatsapp", `WhatsApp templates generated: ${category}`, candidate._id, "SourceCandidate", {
     actionType: "whatsapp_generated",
     candidateId: candidate._id,

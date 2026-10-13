@@ -1,6 +1,8 @@
 const Communication = require("../models/Communication");
 const { sendMail, formatEmailErrorResponse } = require("./emailService");
 
+const { sendWhatsAppMessage } = require("./whatsappService");
+
 const DEFAULT_INTERVALS_MINUTES = [0, 4320, 10080, 14400, 20160];
 
 const getSequenceIntervals = () => {
@@ -20,7 +22,7 @@ const renderHtml = (body) => String(body || "").replace(/\n/g, "<br/>");
 const sendCommunication = async (communication) => {
   await communication.populate("recruiterId", "name email");
   const recruiter = communication.recruiterId || {};
-  const result = await sendMail({
+  const result = communication.channel === "WHATSAPP" ? await sendWhatsAppMessage({ to: communication.recipient, body: communication.body }) : await sendMail({
     fromName: recruiter.name || "Jobs Territory",
     from: recruiter.email,
     to: communication.recipient,
@@ -40,7 +42,7 @@ const sendCommunication = async (communication) => {
 const runEmailSequenceWorkerOnce = async () => {
   const now = new Date();
   const due = await Communication.find({
-    channel: "EMAIL",
+    channel: { $in: ["EMAIL", "WHATSAPP"] },
     sequenceId: { $type: "string" },
     status: "scheduled",
     scheduledAt: { $lte: now },
