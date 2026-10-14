@@ -2,6 +2,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const Job = require("../models/Jobs");
 const SourcedCandidate = require("../models/SourcedCandidate");
+const CandidateByJob = require("../models/CandidatesByJob");
 const CallLog = require("../models/CallLog");
 const FollowUp = require("../models/FollowUp");
 const Communication = require("../models/Communication");
@@ -13,6 +14,7 @@ const logActivity = require("./logactivity");
 const { sendMail, formatEmailErrorResponse } = require("../services/emailService");
 const { sendWhatsAppMessage } = require("../services/whatsappService");
 const { runEmailSequenceWorkerOnce, scheduleForStep } = require("../services/emailSequenceWorker");
+const { getLineupForm, validateLineupFields } = require("../services/lineupConversion");
 const { getSignedUrl } = require("../config/s3Config");
 
 const router = express.Router();
@@ -115,7 +117,7 @@ const assertJobAccess = async (req, jobId) => {
 
 const assertCandidateAccess = async (req, candidateId) => {
   if (!isObjectId(candidateId)) return { candidate: null, job: null };
-  const candidate = await SourcedCandidate.findById(candidateId)
+  const candidate = await SourcedCandidate.findOne({ _id: candidateId, ...ownerScope(req) })
     .populate({
       path: "requirementId",
       populate: { path: "clientId", select: "companyName name clientName" },
@@ -154,7 +156,7 @@ const buildPhoneRegex = (phoneStr) => {
   if (!phoneStr) return null;
   const digits = String(phoneStr).replace(/\D/g, "");
   if (digits.length >= 10) {
-    return new RegExp(`${digits.slice(-10)}$`);
+    return new RegExp(`${digits.slice(-10).split("").join("\\D*")}\\D*$`);
   }
   return new RegExp(escapeRegex(String(phoneStr).trim()), "i");
 };
@@ -170,6 +172,43 @@ const buildCandidateMatchConditions = (email, phone) => {
     or.push({ phoneNumber: phoneRegex });
   }
   return or;
+};
+
+const getCandidateAdditionBlock = async (req, job, email, phone, checkOwnSource = true) => {
+  const jobId = job._id;
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  const cleanPhone = String(phone || "").replace(/\D/g, "");
+  const phoneKey = value => {
+    const digits = String(value || "").replace(/\D/g, "");
+    return digits.length >= 10 ? digits.slice(-10) : digits;
+  };
+  // Normal candidate fields are configurable: labels, casing and field IDs vary by job.
+  const definitions = new Map();
+  (job.candidateFields || []).forEach(field => {
+    const name = String(field.name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const kind = field.type === "email" || name.includes("email") ? "email"
+      : field.type === "tel" || /phone|mobile|contactnumber/.test(name) ? "phone" : "";
+    if (kind) {
+      definitions.set(field.name, kind);
+      if (field.id) definitions.set(field.id, kind);
+    }
+  });
+  const normalCandidates = await CandidateByJob.find({ jobId }).select("dynamicFields").lean();
+  const isNormalDuplicate = normalCandidates.some(candidate => Object.entries(candidate.dynamicFields || {}).some(([key, value]) => {
+    const name = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const kind = definitions.get(key) || (name.includes("email") ? "email" : /phone|mobile|contactnumber/.test(name) ? "phone" : "");
+    const values = Array.isArray(value) ? value : [value];
+    return values.some(item => kind === "email" ? Boolean(cleanEmail) && String(item ?? "").trim().toLowerCase() === cleanEmail
+      : kind === "phone" && Boolean(cleanPhone) && phoneKey(item) === phoneKey(cleanPhone));
+  }));
+  if (isNormalDuplicate) {
+    return { canAdd: false, duplicateSource: "normal", message: "Duplicate: this profile already exists in this requirement's candidates list and cannot be added again." };
+  }
+  const sourceMatches = buildCandidateMatchConditions(email, phone);
+  if (checkOwnSource && req.user.designation === "Recruiter" && sourceMatches.length && await SourcedCandidate.exists({ requirementId: jobId, recruiterId: req.user._id, $or: sourceMatches })) {
+    return { canAdd: false, duplicateSource: "own_source", message: "You have already added this profile to this requirement." };
+  }
+  return { canAdd: true };
 };
 
 const normalizeWhatsAppPhone = (value = "") => {
@@ -199,7 +238,7 @@ const buildJobSummary = (job, counts = {}) => ({
   keySkills: job.keySkills || [],
   noOfPositions: job.noOfPositions || 0,
   status: job.status,
-  candidateCount: counts.candidateCount || job.candidateCount || 0,
+  candidateCount: counts.candidateCount ?? job.candidateCount ?? 0,
   pendingFollowUpsCount: counts.pendingFollowUpsCount || 0,
   createdAt: job.createdAt,
 });
@@ -581,6 +620,8 @@ router.get("/requirements/:requirementId/candidates/check-duplicate", async (req
       return res.json({ success: true, hasDuplicate: false, duplicates: [] });
     }
 
+    const additionBlock = await getCandidateAdditionBlock(req, job, email, phone);
+
     const duplicates = await SourcedCandidate.find({ $or: matchConditions })
       .populate("recruiterId", "name email designation")
       .populate("requirementId", "title")
@@ -606,7 +647,8 @@ router.get("/requirements/:requirementId/candidates/check-duplicate", async (req
 
     res.json({
       success: true,
-      hasDuplicate: formatted.length > 0,
+      ...additionBlock,
+      hasDuplicate: additionBlock.duplicateSource === "normal" || (req.user.designation !== "Recruiter" && formatted.length > 0),
       duplicates: req.user.designation === "Recruiter" ? formatted.map(d => ({ isSameRequirement: d.isSameRequirement, isSameRecruiter: d.isSameRecruiter })) : formatted,
     });
   } catch (error) {
@@ -620,13 +662,13 @@ router.get("/requirements/:requirementId/candidates", async (req, res) => {
     const job = await assertJobAccess(req, req.params.requirementId);
     if (!job) return res.status(404).json({ success: false, message: "Requirement not found" });
 
-    const candidates = await SourcedCandidate.find({ requirementId: job._id })
+    const candidates = await SourcedCandidate.find({ requirementId: job._id, ...ownerScope(req) })
       .populate("recruiterId", "name email designation")
       .sort({ createdAt: -1 })
       .lean();
 
     const candidateIds = candidates.map((c) => c._id);
-    const snapshot = await getCandidateCommunicationSnapshot(candidateIds, null);
+    const snapshot = await getCandidateCommunicationSnapshot(candidateIds, canSeeAllFollowUps(req.user) ? null : req.user._id);
 
     const emails = candidates.map((c) => c.email).filter(Boolean);
     const phones = candidates.map((c) => c.phoneNumber).filter(Boolean);
@@ -709,7 +751,7 @@ router.get("/requirements/:requirementId/candidates", async (req, res) => {
 
     res.json({
       success: true,
-      candidates: req.user.designation === "Recruiter" ? enrichedCandidates.map(({ duplicateProfiles, originalAddedBy, duplicateCount, isOriginal, ...candidate }) => candidate) : enrichedCandidates,
+      candidates: req.user.designation === "Recruiter" ? enrichedCandidates.map(({ duplicateProfiles, originalAddedBy, duplicateCount, isOriginal, ...candidate }) => ({ ...candidate, isDuplicate: false })) : enrichedCandidates,
     });
   } catch (error) {
     console.error("Follow-up candidates load error:", error);
@@ -737,24 +779,14 @@ router.post("/requirements/:requirementId/candidates", upload.single("resume"), 
     const cleanPhone = phone.trim();
     const matchConditions = buildCandidateMatchConditions(cleanEmail, cleanPhone);
 
+    const additionBlock = await getCandidateAdditionBlock(req, job, cleanEmail, cleanPhone);
+    if (!additionBlock.canAdd) return res.status(409).json({ success: false, ...additionBlock });
+
     const existingCandidates = await SourcedCandidate.find({ $or: matchConditions })
       .populate("recruiterId", "name email designation")
       .populate("requirementId", "title")
       .sort({ createdAt: 1 })
       .lean();
-
-    const duplicateByCurrentUserInSameJob = existingCandidates.find(
-      (c) => toId(c.requirementId?._id || c.requirementId) === toId(job._id) &&
-             toId(c.recruiterId?._id || c.recruiterId) === toId(req.user._id)
-    );
-
-    if (duplicateByCurrentUserInSameJob) {
-      return res.status(400).json({
-        success: false,
-        message: "You have already added this candidate profile for this requirement.",
-        existingCandidate: buildCandidateSummary(duplicateByCurrentUserInSameJob),
-      });
-    }
 
     const isDuplicate = existingCandidates.length > 0;
     const earliestCandidate = isDuplicate ? existingCandidates[0] : null;
@@ -817,17 +849,93 @@ router.post("/requirements/:requirementId/candidates", upload.single("resume"), 
 
     res.status(201).json({
       success: true,
-      message: isDuplicate
+      message: req.user.designation === "Recruiter" ? "Candidate added successfully" : isDuplicate
         ? `Candidate profile added! Note: This profile was already added by ${previousAdderName}.`
         : "Candidate added successfully",
-      isDuplicate,
-      previouslyAddedBy: previousAdderName,
-      previousProfiles: formattedPrevious,
+      isDuplicate: req.user.designation === "Recruiter" ? false : isDuplicate,
+      ...(req.user.designation === "Recruiter" ? {} : { previouslyAddedBy: previousAdderName, previousProfiles: formattedPrevious }),
       candidate: buildCandidateSummary(populatedCandidate, { isOwner: true }),
     });
   } catch (error) {
     console.error("Follow-up candidate create error:", error);
     res.status(500).json({ success: false, message: "Failed to add candidate" });
+  }
+});
+
+// Candidate deletion is restricted to administrators, including bulk requests.
+router.delete("/requirements/:requirementId/candidates", async (req, res) => {
+  if (req.user.designation !== "Admin") return res.status(403).json({ success: false, message: "Only admins can delete candidates" });
+  try {
+    const job = await assertJobAccess(req, req.params.requirementId);
+    if (!job) return res.status(404).json({ success: false, message: "Requirement not found" });
+    const ids = req.body.candidateIds;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 500 || ids.some(id => typeof id !== "string" || !isObjectId(id))) return res.status(400).json({ success: false, message: "Select valid candidates to delete (up to 500)" });
+    const candidates = await SourcedCandidate.find({ _id: { $in: ids }, requirementId: job._id }).select("_id").lean();
+    if (candidates.length !== new Set(ids).size) return res.status(400).json({ success: false, message: "Some selected candidates no longer exist in this requirement. Refresh and try again." });
+    const candidateIds = candidates.map(candidate => candidate._id);
+    const scope = { candidateId: { $in: candidateIds }, requirementId: job._id };
+    await Communication.updateMany(scope, { $set: { status: "stopped", stoppedAt: new Date(), stopReason: "candidate_deleted" } });
+    await FollowUp.deleteMany(scope);
+    await CallLog.deleteMany(scope);
+    await Communication.deleteMany(scope);
+    await SourcedCandidate.updateMany({ originalCandidateId: { $in: candidateIds } }, { $set: { originalCandidateId: null } });
+    const result = await SourcedCandidate.deleteMany({ _id: { $in: candidateIds }, requirementId: job._id });
+    logActivity(req.user._id, "deleted", "source-candidate", `Deleted ${result.deletedCount} candidate profiles`, job._id, "Job", { actionType: "candidates_deleted", jobId: job._id, performedByRole: req.user.designation, metadata: { candidateIds } });
+    res.json({ success: true, deleted: result.deletedCount });
+  } catch (error) {
+    console.error("Candidate deletion failed:", error);
+    res.status(500).json({ success: false, message: "Failed to delete candidates. Refresh and try again." });
+  }
+});
+
+router.patch("/candidates/:candidateId/status", async (req, res) => {
+  try {
+    const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
+    if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
+    const statuses = ["Not interested", "Wrong number", "No answer", "Busy", "Lineup"];
+    if (!statuses.includes(req.body.status)) return res.status(400).json({ success: false, message: "Select a valid candidate status" });
+    await SourcedCandidate.updateOne({ _id: candidate._id }, { $set: { status: req.body.status } });
+    logActivity(req.user._id, "updated", "source-candidate", `Candidate status: ${req.body.status}`, candidate._id, "SourceCandidate", { actionType: "candidate_status_updated", candidateId: candidate._id, jobId: job._id, oldValue: candidate.status || "Sourced", newValue: req.body.status });
+    res.json({ success: true, status: req.body.status });
+  } catch (error) { res.status(500).json({ success: false, message: "Failed to update candidate status" }); }
+});
+
+router.get("/candidates/:candidateId/lineup", async (req, res) => {
+  try {
+    const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
+    if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
+    res.json({ success: true, ...getLineupForm(candidate, job), hasResume: Boolean(candidate.resumeFileUrl), jobTitle: job.title });
+  } catch (error) { res.status(500).json({ success: false, message: "Failed to load mandatory fields" }); }
+});
+
+router.post("/candidates/:candidateId/lineup", async (req, res) => {
+  try {
+    const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
+    if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
+    if (req.user.designation === "Recruiter" && job.status !== "Open") return res.status(403).json({ success: false, message: "Candidates can only be converted for open requirements" });
+    const form = getLineupForm(candidate, job);
+    const { errors, dynamicFields } = validateLineupFields(form.fields, { ...form.values, ...(req.body.dynamicFields || {}) });
+    if (errors.length) return res.status(400).json({ success: false, message: "Complete the mandatory fields before converting", errors });
+    // Reuse the source ID: retries cannot create a second normal candidate.
+    let normal = await CandidateByJob.findById(candidate._id);
+    if (normal && toId(normal.jobId) !== toId(job._id)) return res.status(409).json({ success: false, message: "Candidate already belongs to another requirement" });
+    if (!normal) {
+      const block = await getCandidateAdditionBlock(req, job, dynamicFields.Email, dynamicFields.Phone, false);
+      if (!block.canAdd) return res.status(409).json({ success: false, ...block });
+      normal = await CandidateByJob.create({ _id: candidate._id, jobId: job._id, createdBy: candidate.recruiterId?._id || candidate.recruiterId, dynamicFields, resumeUrl: candidate.resumeFileUrl, linkedinUrl: candidate.linkedinProfile, notes: "Converted to lineup from Follow-ups", status: "New" });
+    }
+    // Stop the source workflow before removing its profile. Preserve its history for audit.
+    await Communication.updateMany({ candidateId: candidate._id, status: { $in: ["generated", "reviewed", "scheduled", "failed"] } }, { $set: { status: "stopped", stoppedAt: new Date(), stopReason: "converted_to_lineup" } });
+    await FollowUp.updateMany({ candidateId: candidate._id, status: { $in: ["Pending", "Overdue"] } }, { $set: { status: "Cancelled" } });
+    await SourcedCandidate.updateMany({ originalCandidateId: candidate._id }, { $set: { originalCandidateId: null } });
+    const candidateCount = await CandidateByJob.countDocuments({ jobId: job._id });
+    await Job.updateOne({ _id: job._id }, { $set: { candidateCount } });
+    await SourcedCandidate.deleteOne({ _id: candidate._id });
+    logActivity(req.user._id, "created", "candidate", "Converted sourced profile to lineup", normal._id, "CandidateByJob", { actionType: "candidate_created", candidateId: normal._id, jobId: job._id, metadata: { source: "followups_lineup", sourceCandidateId: candidate._id } });
+    res.json({ success: true, candidateId: normal._id });
+  } catch (error) {
+    console.error("Lineup conversion failed:", error);
+    res.status(error.code === 11000 ? 409 : 500).json({ success: false, message: error.code === 11000 ? "Conversion is already in progress. Refresh before retrying." : "Failed to convert candidate. You can retry safely." });
   }
 });
 

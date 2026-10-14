@@ -12,6 +12,7 @@ const sourcedCandidateSchema = new mongoose.Schema(
       ref: "Job",
       required: true,
     },
+    status: { type: String, enum: ["Sourced", "Not interested", "Wrong number", "No answer", "Busy", "Lineup"], default: "Sourced" },
     resumeFileUrl: {
       type: String,
       default: null,
