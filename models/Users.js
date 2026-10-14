@@ -70,6 +70,16 @@ const UserSchema = new mongoose.Schema({
   appPassword: {
     type: String,
   },
+  followUpEmailProvider: { type: String, enum: ["smtp", "microsoft"], default: "smtp" },
+  microsoftMail: { type: new mongoose.Schema({
+    email: String,
+    refreshToken: String,
+    connectedAt: Date,
+    needsReconnect: { type: Boolean, default: false },
+    pendingState: String,
+    pendingVerifier: String,
+    pendingExpiresAt: Date,
+  }, { _id: false }), select: false },
   isDisabled: {
     type: Boolean,
     default: false,

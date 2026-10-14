@@ -55,6 +55,11 @@ const jobSchema = new mongoose.Schema(
     assignedRecruiters: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], required: true },
     assignedMentors: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
     leadRecruiter: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    mentorAssignments: { type: Map, of: new mongoose.Schema({
+      mentorId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      assignedRecruiters: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+      leadRecruiter: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    }, { _id: false }), default: {} },
 
     candidateFields: [candidateFieldSchema],
     communicationTemplates: { type: [new mongoose.Schema({

@@ -5,6 +5,9 @@ const Client = require("../models/Client");
 const { getSignedUrl, deleteFile } = require("../config/s3Config");
 const jobDescriptionUpload = require("../middleware/jobDescriptionUpload");
 
+const { protect } = require("../middleware/authMiddleware");
+const { mergeMentorAssignments } = require("../services/mentorJobAssignments");
+
 const router = express.Router();
 
 // ➕ Create a new job
@@ -46,7 +49,7 @@ router.post("/", jobDescriptionUpload.single("jdFile"), async (req, res) => {
       "Job" // targetModel
     );
 
-    const jobObj = newJob.toObject();
+    const jobObj = newJob.toObject({ flattenMaps: true });
     if (jobObj.jdFile) {
       jobObj.jdFile = getSignedUrl(jobObj.jdFile);
     }
@@ -77,11 +80,14 @@ router.get("/", async (req, res) => {
         .populate("assignedRecruiters", "name email")
         .populate("assignedMentors", "name email")
         .populate("leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.mentorId", "name email")
+      .populate("mentorAssignments.$*.leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.assignedRecruiters", "name email")
         .populate("CreatedBy", "name email")
         .populate("clientId", "companyName websiteUrl industry linkedinUrl companyInfo pocs logo")
         .sort({ createdAt: -1 });
       const jobsWithSignedLogos = jobs.map(job => {
-        const jobObj = job.toObject();
+        const jobObj = job.toObject({ flattenMaps: true });
         if (jobObj.clientId && jobObj.clientId.logo) {
           jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
         }
@@ -210,6 +216,9 @@ router.get("/", async (req, res) => {
       .populate("assignedRecruiters", "name email")
       .populate("assignedMentors", "name email")
       .populate("leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.mentorId", "name email")
+      .populate("mentorAssignments.$*.leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.assignedRecruiters", "name email")
       .populate("CreatedBy", "name email")
       .populate("clientId", "companyName websiteUrl industry linkedinUrl companyInfo pocs logo")
       .skip(skip)
@@ -292,6 +301,9 @@ router.get("/createdby/:userId", async (req, res) => {
       .populate("assignedRecruiters", "name email")
       .populate("assignedMentors", "name email")
       .populate("leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.mentorId", "name email")
+      .populate("mentorAssignments.$*.leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.assignedRecruiters", "name email")
       .populate("CreatedBy", "name email")
       .populate("clientId", "companyName websiteUrl industry linkedinUrl companyInfo pocs logo")
       .sort({ createdAt: -1 });
@@ -304,7 +316,7 @@ router.get("/createdby/:userId", async (req, res) => {
     }
 
     const jobsWithSignedLogos = jobs.map(job => {
-      const jobObj = job.toObject();
+      const jobObj = job.toObject({ flattenMaps: true });
       if (jobObj.clientId && jobObj.clientId.logo) {
         jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
       }
@@ -373,11 +385,14 @@ router.get("/assigned/:recruiterId", async (req, res) => {
         .populate("assignedRecruiters", "name email")
         .populate("assignedMentors", "name email")
         .populate("leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.mentorId", "name email")
+      .populate("mentorAssignments.$*.leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.assignedRecruiters", "name email")
         .populate("CreatedBy", "name email")
         .populate("clientId", "companyName websiteUrl industry linkedinUrl companyInfo pocs logo")
         .sort({ createdAt: -1 });
       const jobsWithSignedLogos = jobs.map(job => {
-        const jobObj = job.toObject();
+        const jobObj = job.toObject({ flattenMaps: true });
         if (jobObj.clientId && jobObj.clientId.logo) {
           jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
         }
@@ -397,6 +412,9 @@ router.get("/assigned/:recruiterId", async (req, res) => {
       .populate("assignedRecruiters", "name email")
       .populate("assignedMentors", "name email")
       .populate("leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.mentorId", "name email")
+      .populate("mentorAssignments.$*.leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.assignedRecruiters", "name email")
       .populate("CreatedBy", "name email")
       .populate("clientId", "companyName websiteUrl industry linkedinUrl companyInfo pocs logo")
       .sort({ createdAt: -1 })
@@ -406,7 +424,7 @@ router.get("/assigned/:recruiterId", async (req, res) => {
     const totalJobs = await Job.countDocuments(query);
 
     const jobsWithSignedLogos = jobs.map(job => {
-      const jobObj = job.toObject();
+      const jobObj = job.toObject({ flattenMaps: true });
       if (jobObj.clientId && jobObj.clientId.logo) {
         jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
       }
@@ -440,12 +458,15 @@ router.get("/:id", async (req, res) => {
       .populate("assignedRecruiters", "name email")
       .populate("assignedMentors", "name email")
       .populate("leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.mentorId", "name email")
+      .populate("mentorAssignments.$*.leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.assignedRecruiters", "name email")
       .populate("clientId", "companyName websiteUrl industry linkedinUrl companyInfo pocs logo")
 
     if (!job)
       return res.status(404).json({ success: false, message: "Job not found" });
 
-    const jobObj = job.toObject();
+    const jobObj = job.toObject({ flattenMaps: true });
     if (jobObj.clientId && jobObj.clientId.logo) {
       jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
     }
@@ -460,7 +481,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // ✏️ Update a job
-router.put("/:id", jobDescriptionUpload.single("jdFile"), async (req, res) => {
+router.put("/:id", protect, jobDescriptionUpload.single("jdFile"), async (req, res) => {
   try {
     let updateData = {};
     if (req.body.jobData) {
@@ -478,6 +499,20 @@ router.put("/:id", jobDescriptionUpload.single("jdFile"), async (req, res) => {
       return res.status(404).json({ success: false, message: "Job not found" });
     }
 
+    if (!req.user || req.user.isDisabled) return res.status(403).json({ success: false, message: "Not allowed" });
+    const isMentorAssignment = req.user.designation === "Mentor" && (updateData.assignedRecruiters !== undefined || updateData.leadRecruiter !== undefined);
+    if (req.user.designation === "Mentor" && !(oldJob.assignedMentors || []).some(id => String(id) === String(req.user._id)) && String(oldJob.CreatedBy) !== String(req.user._id)) {
+      return res.status(403).json({ success: false, message: "You are not assigned to this requirement" });
+    }
+    updateData.UpdatedBy = req.user._id;
+    delete updateData.mentorAssignments;
+    delete updateData.__v;
+    delete updateData._id;
+    let mentorTeam = [];
+    if (isMentorAssignment) {
+      mentorTeam = await User.find({ designation: "Recruiter", isDisabled: { $ne: true }, $or: [{ reporter: req.user._id }, { secondary_managers: req.user._id }] }).select("_id").lean();
+    }
+
     if (req.file) {
       if (oldJob.jdFile) {
         await deleteFile(oldJob.jdFile);
@@ -492,12 +527,26 @@ router.put("/:id", jobDescriptionUpload.single("jdFile"), async (req, res) => {
       updateData.jdFileName = null;
     }
 
-    const updatedJob = await Job.findByIdAndUpdate(req.params.id, updateData, {
-      new: true,
-    })
+    let savedJob;
+    if (isMentorAssignment) {
+      for (let attempt = 0; attempt < 5 && !savedJob; attempt++) {
+        const current = await Job.findById(req.params.id).lean();
+        if (!current) return res.status(404).json({ success: false, message: "Job not found" });
+        const assignments = mergeMentorAssignments(current, updateData, req.user._id, mentorTeam.map(member => member._id));
+        savedJob = await Job.findOneAndUpdate({ _id: current._id, __v: current.__v ?? { $exists: false } }, { $set: { ...updateData, ...assignments }, $inc: { __v: 1 } }, { new: true, runValidators: true });
+      }
+      if (!savedJob) return res.status(409).json({ success: false, message: "Assignments changed while saving. Please try again." });
+    } else {
+      if (req.user.designation === "Mentor") delete updateData.assignedMentors;
+      savedJob = await Job.findByIdAndUpdate(req.params.id, { $set: updateData, $inc: { __v: 1 } }, { new: true });
+    }
+    const updatedJob = await Job.findById(savedJob._id)
       .populate("assignedRecruiters", "name email")
       .populate("assignedMentors", "name email")
       .populate("leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.mentorId", "name email")
+      .populate("mentorAssignments.$*.leadRecruiter", "name email")
+      .populate("mentorAssignments.$*.assignedRecruiters", "name email")
       .populate("CreatedBy", "name email")
       .populate("clientId", "companyName websiteUrl industry linkedinUrl companyInfo pocs logo");
 
@@ -529,7 +578,7 @@ router.put("/:id", jobDescriptionUpload.single("jdFile"), async (req, res) => {
       "Job" // targetModel
     );
 
-    const jobObj = updatedJob.toObject();
+    const jobObj = updatedJob.toObject({ flattenMaps: true });
     if (jobObj.clientId && jobObj.clientId.logo) {
       jobObj.clientId.logo = getSignedUrl(jobObj.clientId.logo);
     }
@@ -540,7 +589,7 @@ router.put("/:id", jobDescriptionUpload.single("jdFile"), async (req, res) => {
     res.json({ success: true, job: jobObj });
   } catch (error) {
     console.error("Error updating job:", error);
-    res.status(500).json({ success: false, message: "Failed to update job" });
+    res.status(error.status || 500).json({ success: false, message: error.status ? error.message : "Failed to update job" });
   }
 });
 

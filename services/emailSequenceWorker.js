@@ -1,6 +1,7 @@
 const Communication = require("../models/Communication");
-const { sendMail, formatEmailErrorResponse } = require("./emailService");
+const { formatEmailErrorResponse } = require("./emailService");
 
+const { sendUserMail } = require("./userEmailService");
 const { sendWhatsAppMessage } = require("./whatsappService");
 
 const DEFAULT_INTERVALS_MINUTES = [0, 4320, 10080, 14400, 20160];
@@ -20,16 +21,11 @@ const scheduleForStep = (step, startedAt = new Date()) => {
 const renderHtml = (body) => String(body || "").replace(/\n/g, "<br/>");
 
 const sendCommunication = async (communication) => {
-  await communication.populate("recruiterId", "name email");
-  const recruiter = communication.recruiterId || {};
-  const result = communication.channel === "WHATSAPP" ? await sendWhatsAppMessage({ to: communication.recipient, body: communication.body }) : await sendMail({
-    fromName: recruiter.name || "Jobs Territory",
-    from: recruiter.email,
+  const result = communication.channel === "WHATSAPP" ? await sendWhatsAppMessage({ to: communication.recipient, body: communication.body }) : await sendUserMail(communication.recruiterId, {
     to: communication.recipient,
     subject: communication.subject,
     html: renderHtml(communication.body),
     text: communication.body,
-    replyTo: recruiter.email,
   });
   communication.status = "sent";
   communication.providerMessageId = result.messageId || result.traceId;

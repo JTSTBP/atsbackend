@@ -11,7 +11,8 @@ const ActivityLog = require("../models/activitylog");
 const upload = require("../middleware/upload");
 const { protect } = require("../middleware/authMiddleware");
 const logActivity = require("./logactivity");
-const { sendMail, formatEmailErrorResponse } = require("../services/emailService");
+const { formatEmailErrorResponse } = require("../services/emailService");
+const { getUserEmailOptions, sendUserMail } = require("../services/userEmailService");
 const { sendWhatsAppMessage } = require("../services/whatsappService");
 const { runEmailSequenceWorkerOnce, scheduleForStep } = require("../services/emailSequenceWorker");
 const { getLineupForm, validateLineupFields } = require("../services/lineupConversion");
@@ -174,7 +175,7 @@ const buildCandidateMatchConditions = (email, phone) => {
   return or;
 };
 
-const getCandidateAdditionBlock = async (req, job, email, phone, checkOwnSource = true) => {
+const getCandidateAdditionBlock = async (req, job, email, phone, checkOwnSource = true, excludeCandidateId = null) => {
   const jobId = job._id;
   const cleanEmail = String(email || "").trim().toLowerCase();
   const cleanPhone = String(phone || "").replace(/\D/g, "");
@@ -205,7 +206,7 @@ const getCandidateAdditionBlock = async (req, job, email, phone, checkOwnSource 
     return { canAdd: false, duplicateSource: "normal", message: "Duplicate: this profile already exists in this requirement's candidates list and cannot be added again." };
   }
   const sourceMatches = buildCandidateMatchConditions(email, phone);
-  if (checkOwnSource && req.user.designation === "Recruiter" && sourceMatches.length && await SourcedCandidate.exists({ requirementId: jobId, recruiterId: req.user._id, $or: sourceMatches })) {
+  if (checkOwnSource && req.user.designation === "Recruiter" && sourceMatches.length && await SourcedCandidate.exists({ requirementId: jobId, recruiterId: req.user._id, ...(excludeCandidateId ? { _id: { $ne: excludeCandidateId } } : {}), $or: sourceMatches })) {
     return { canAdd: false, duplicateSource: "own_source", message: "You have already added this profile to this requirement." };
   }
   return { canAdd: true };
@@ -478,14 +479,11 @@ const makeDraftStudioTemplates = (candidate, job, recruiter) => {
 };
 
 const sendEmailCommunication = async ({ communication, recruiter, recipient, subject, body, htmlBody }) => {
-  const result = await sendMail({
-    fromName: recruiter.name || "Jobs Territory",
-    from: recruiter.email,
+  const result = await sendUserMail(recruiter._id, {
     to: recipient,
     subject,
     html: htmlBody || body.replace(/\n/g, "<br/>"),
     text: body,
-    replyTo: recruiter.email,
   });
   communication.status = "sent";
   communication.providerMessageId = result.messageId || result.traceId;
@@ -614,15 +612,19 @@ router.get("/requirements/:requirementId/candidates/check-duplicate", async (req
     const job = await assertJobAccess(req, req.params.requirementId);
     if (!job) return res.status(404).json({ success: false, message: "Requirement not found" });
 
-    const { email = "", phone = "" } = req.query;
+    const { email = "", phone = "", candidateId } = req.query;
+    if (candidateId) {
+      const access = await assertCandidateAccess(req, candidateId);
+      if (!access.candidate || toId(access.job._id) !== toId(job._id)) return res.status(404).json({ success: false, message: "Candidate not found" });
+    }
     const matchConditions = buildCandidateMatchConditions(email, phone);
     if (matchConditions.length === 0) {
       return res.json({ success: true, hasDuplicate: false, duplicates: [] });
     }
 
-    const additionBlock = await getCandidateAdditionBlock(req, job, email, phone);
+    const additionBlock = await getCandidateAdditionBlock(req, job, email, phone, true, candidateId || null);
 
-    const duplicates = await SourcedCandidate.find({ $or: matchConditions })
+    const duplicates = await SourcedCandidate.find({ $or: matchConditions, ...(candidateId ? { _id: { $ne: candidateId } } : {}) })
       .populate("recruiterId", "name email designation")
       .populate("requirementId", "title")
       .sort({ createdAt: 1 })
@@ -859,6 +861,34 @@ router.post("/requirements/:requirementId/candidates", upload.single("resume"), 
   } catch (error) {
     console.error("Follow-up candidate create error:", error);
     res.status(500).json({ success: false, message: "Failed to add candidate" });
+  }
+});
+
+router.patch("/candidates/:candidateId", upload.single("resume"), async (req, res) => {
+  try {
+    const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
+    if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
+    const name = String(req.body.candidateName || "").trim();
+    const email = String(req.body.email || "").trim();
+    const phoneNumber = String(req.body.phone || "").trim();
+    if (!name || !email || !phoneNumber) return res.status(400).json({ success: false, message: "Candidate name, email and phone are required" });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ success: false, message: "Invalid candidate email" });
+    if (!/^\d{10,15}$/.test(phoneNumber.replace(/\D/g, ""))) return res.status(400).json({ success: false, message: "Enter a valid phone number" });
+    const block = await getCandidateAdditionBlock(req, job, email, phoneNumber, true, candidate._id);
+    if (!block.canAdd) return res.status(409).json({ success: false, ...block });
+    const updates = { name, email, phoneNumber };
+    if (req.file) updates.resumeFileUrl = req.file.location || req.file.path;
+    const updated = await SourcedCandidate.findOneAndUpdate({ _id: candidate._id, ...ownerScope(req) }, { $set: updates }, { new: true, runValidators: true }).populate("recruiterId", "name email designation").lean();
+    if (!updated) return res.status(404).json({ success: false, message: "Candidate not found" });
+    // Already-sent or in-flight messages retain their original recipient.
+    const unsent = { candidateId: candidate._id, status: { $in: ["generated", "reviewed", "scheduled", "failed"] } };
+    await Communication.updateMany({ ...unsent, channel: "EMAIL" }, { $set: { recipient: email } });
+    await Communication.updateMany({ ...unsent, channel: "WHATSAPP" }, { $set: { recipient: normalizeWhatsAppPhone(phoneNumber) } });
+    logActivity(req.user._id, "updated", "source-candidate", "Candidate profile updated", candidate._id, "SourceCandidate", { actionType: "candidate_updated", candidateId: candidate._id, jobId: job._id });
+    res.json({ success: true, candidate: buildCandidateSummary(updated) });
+  } catch (error) {
+    console.error("Candidate update failed:", error);
+    res.status(500).json({ success: false, message: "Failed to update candidate" });
   }
 });
 
@@ -1228,6 +1258,7 @@ router.post("/candidates/:candidateId/draft-studio/start", async (req, res) => {
     const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
     if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
     const channel = req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL";
+    if (channel === "EMAIL") await getUserEmailOptions(req.user._id);
     const recipient = channel === "EMAIL" ? getCandidateField(candidate, ["email", "Email"]) : normalizeWhatsAppPhone(getCandidateField(candidate, ["phoneNumber", "Phone", "phone", "Mobile", "mobile"]));
     if (!recipient || (channel === "EMAIL" ? !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient) : recipient.length < 11 || recipient.length > 15)) return res.status(400).json({ success: false, message: "Invalid candidate contact details" });
     const existing = await Communication.findOne({ candidateId: candidate._id, requirementId: job._id, recruiterId: req.user._id, channel, sequenceId: { $type: "string" }, status: { $in: ["scheduled", "pending"] } });
@@ -1257,7 +1288,7 @@ router.post("/candidates/:candidateId/draft-studio/start", async (req, res) => {
     });
     res.json({ success: true, scheduled, workerResult });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Email sequence scheduling failed", ...formatEmailErrorResponse(error) });
+    res.status(error.status || 500).json({ success: false, message: "Email sequence scheduling failed", ...formatEmailErrorResponse(error) });
   }
 });
 
@@ -1339,6 +1370,7 @@ router.post("/candidates/:candidateId/email/send", async (req, res) => {
       const existing = await Communication.findOne({ recruiterId: req.user._id, channel: "EMAIL", idempotencyKey });
       if (existing) return res.json({ success: true, communication: existing, duplicate: true });
     }
+    await getUserEmailOptions(req.user._id);
     const communication = await Communication.create({
       candidateId: candidate._id,
       requirementId: job._id,
@@ -1351,14 +1383,11 @@ router.post("/candidates/:candidateId/email/send", async (req, res) => {
       idempotencyKey,
     });
     try {
-      const result = await sendMail({
-        fromName: req.user.name || "Jobs Territory",
-        from: req.user.email,
+      const result = await sendUserMail(req.user._id, {
         to: recipient,
         subject,
         html: htmlBody || body.replace(/\n/g, "<br/>"),
         text: body,
-        replyTo: req.user.email,
       });
       communication.status = "sent";
       communication.providerMessageId = result.messageId || result.traceId;
@@ -1379,7 +1408,7 @@ router.post("/candidates/:candidateId/email/send", async (req, res) => {
       res.status(500).json({ success: false, message: "Email sending failed", ...formatEmailErrorResponse(error), communication });
     }
   } catch (error) {
-    res.status(500).json({ success: false, message: "Failed to send email" });
+    res.status(error.status || 500).json({ success: false, message: "Failed to send email", ...formatEmailErrorResponse(error) });
   }
 });
 
