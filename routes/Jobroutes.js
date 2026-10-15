@@ -494,6 +494,8 @@ router.put("/:id", protect, jobDescriptionUpload.single("jdFile"), async (req, r
       updateData = { ...req.body };
     }
 
+    if (Array.isArray(updateData.communicationTemplates) && updateData.communicationTemplates.filter(template => template.channel === "WHATSAPP").length > 1) return res.status(400).json({ success: false, message: "Only one WhatsApp template is allowed per requirement" });
+
     const oldJob = await Job.findById(req.params.id);
     if (!oldJob) {
       return res.status(404).json({ success: false, message: "Job not found" });

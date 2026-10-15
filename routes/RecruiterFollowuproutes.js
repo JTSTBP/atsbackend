@@ -1137,6 +1137,7 @@ router.get("/candidates/:candidateId/draft-studio", async (req, res) => {
 
 router.post("/candidates/:candidateId/draft-studio/generate", async (req, res) => {
   try {
+    if (req.query.channel === "whatsapp") return res.status(400).json({ success: false, message: "WhatsApp uses one template and direct messages, not sequences." });
     const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
     if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
     const recipient = getCandidateField(candidate, ["email", "Email"]);
@@ -1255,6 +1256,7 @@ router.post("/candidates/:candidateId/draft-studio/review", async (req, res) => 
 
 router.post("/candidates/:candidateId/draft-studio/start", async (req, res) => {
   try {
+    if (req.query.channel === "whatsapp") return res.status(400).json({ success: false, message: "WhatsApp uses direct messages. Use Send message instead of a sequence." });
     const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
     if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
     const channel = req.query.channel === "whatsapp" ? "WHATSAPP" : "EMAIL";
@@ -1279,6 +1281,13 @@ router.post("/candidates/:candidateId/draft-studio/start", async (req, res) => {
       scheduled.push(draft);
     }
     const workerResult = await runEmailSequenceWorkerOnce();
+    const failedDraft = await Communication.findOne({ sequenceId, recruiterId: req.user._id, status: "failed" }).lean();
+    if (failedDraft) {
+      let failure = {};
+      try { failure = JSON.parse(failedDraft.errorMessage || "{}"); } catch { /* Show a safe fallback for legacy error strings. */ }
+      return res.status(422).json({ success: false, code: failure.code || "EMAIL_SEND_FAILED", message: failure.message || "The first email could not be sent. Check the error shown in the email draft.", sequenceId });
+    }
+
     logActivity(req.user._id, "scheduled", "candidate-email-sequence", `Email sequence scheduled: ${scheduled.length} emails`, candidate._id, "SourceCandidate", {
       actionType: "email_sequence_scheduled",
       candidateId: candidate._id,
@@ -1416,7 +1425,7 @@ router.post("/candidates/:candidateId/whatsapp/generate", async (req, res) => {
   const { candidate, job } = await assertCandidateAccess(req, req.params.candidateId);
   if (!candidate) return res.status(404).json({ success: false, message: "Candidate not found" });
   const category = WHATSAPP_CATEGORIES.includes(req.body.category) ? req.body.category : "Custom";
-  const templates = (job.communicationTemplates || []).filter(t => t.channel === "WHATSAPP").map(t => ({ label: t.label, subject: renderTemplate(t.subject, templateVariables(candidate, job, req.user)), body: renderTemplate(t.body, templateVariables(candidate, job, req.user)) }));
+  const templates = (job.communicationTemplates || []).filter(t => t.channel === "WHATSAPP").slice(0, 1).map(t => ({ label: t.label, subject: renderTemplate(t.subject, templateVariables(candidate, job, req.user)), body: renderTemplate(t.body, templateVariables(candidate, job, req.user)) }));
   logActivity(req.user._id, "generated", "candidate-whatsapp", `WhatsApp templates generated: ${category}`, candidate._id, "SourceCandidate", {
     actionType: "whatsapp_generated",
     candidateId: candidate._id,

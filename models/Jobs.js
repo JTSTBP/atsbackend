@@ -67,7 +67,7 @@ const jobSchema = new mongoose.Schema(
       label: { type: String, required: true, trim: true },
       subject: { type: String, default: "" },
       body: { type: String, required: true, trim: true },
-    })], default: [] },
+    })], default: [], validate: { validator: templates => templates.filter(template => template.channel === "WHATSAPP").length <= 1, message: "Only one WhatsApp template is allowed per requirement" } },
     jdFile: { type: String }, // Path or URL to the uploaded Job Description document
     jdFileName: { type: String }, // Original file name of the Job Description document
   },

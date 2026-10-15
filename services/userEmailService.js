@@ -24,7 +24,7 @@ const getUserEmailOptions = async (userId) => {
   if ((password.startsWith('"') && password.endsWith('"')) || (password.startsWith("'") && password.endsWith("'"))) password = password.slice(1, -1).trim();
   if (process.env.SMTP_KEEP_PASSWORD_SPACES !== "true") password = password.replace(/\s+/g, "");
   if (!password.replace(/\s/g, "")) {
-    throw credentialError("USER_APP_PASSWORD_MISSING", "Save your email app password in your user profile before sending follow-up emails.");
+    throw credentialError("USER_APP_PASSWORD_MISSING", "Your account has no email app password saved. Open Profile, add your email app password, and try again.");
   }
   return {
     provider: "smtp",
@@ -39,7 +39,16 @@ const sendUserMail = async (userId, message) => {
   const options = await getUserEmailOptions(userId);
   if (options.provider === "microsoft") return sendMicrosoftMail(options.senderId, message);
   // Apply identity/authentication last so caller data cannot override the sender.
-  return sendMail({ ...message, ...options });
+  try {
+    return await sendMail({ ...message, ...options });
+  } catch (error) {
+    if (["SMTP_AUTH_FAILED", "EAUTH"].includes(error.code) || Number(error.responseCode) === 535) {
+      const rejected = credentialError("USER_APP_PASSWORD_REJECTED", "Your email provider rejected the saved app password. Open Profile and enter a valid app password for your email address, then try again. Your provider may also require SMTP access to be enabled.");
+      rejected.traceId = error.traceId;
+      throw rejected;
+    }
+    throw error;
+  }
 };
 
 module.exports = { getUserEmailOptions, sendUserMail };

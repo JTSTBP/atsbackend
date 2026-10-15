@@ -235,7 +235,7 @@ const classifySmtpError = (error) => {
     const code = String(error?.code || "").toLowerCase();
     const responseCode = Number(error?.responseCode);
 
-    if (responseCode === 535 || message.includes("invalid login") || message.includes("application-specific password") || message.includes("username and password not accepted")) {
+    if (code === "eauth" || responseCode === 535 || message.includes("invalid login") || message.includes("application-specific password") || message.includes("username and password not accepted")) {
         return "SMTP_AUTH_FAILED";
     }
 

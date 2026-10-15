@@ -45,7 +45,8 @@ const model = {
 };
 require.cache[require.resolve("../models/Users")] = { exports: model };
 let smtpCalls = 0;
-require.cache[require.resolve("../services/emailService")] = { exports: { sendMail: async () => { smtpCalls++; return { provider: "smtp" }; } } };
+let smtpError = null;
+require.cache[require.resolve("../services/emailService")] = { exports: { sendMail: async () => { smtpCalls++; if (smtpError) throw smtpError; return { provider: "smtp" }; } } };
 const service = require("../services/microsoftMailService");
 const { sendUserMail, getUserEmailOptions } = require("../services/userEmailService");
 const response = (status, data = {}) => ({ status, ok: status >= 200 && status < 300, json: async () => data, headers: { get: () => "test-request" } });
@@ -117,6 +118,18 @@ test("Microsoft connection, token safety and follow-up sending", async t => {
   await t.test("Gmail continues using the stored app password", async () => {
     reset(); user.email = "sender@gmail.com"; user.appPassword = "dummy-app-password";
     assert.equal((await sendUserMail(user._id, { to: "candidate@example.com" })).provider, "smtp"); assert.equal(smtpCalls, 1);
+  });
+  await t.test("missing and incorrect app passwords show distinct safe messages", async () => {
+    reset(); user.email = "sender@gmail.com";
+    await assert.rejects(getUserEmailOptions(user._id), error => error.code === "USER_APP_PASSWORD_MISSING" && error.message.includes("Open Profile"));
+    user.appPassword = "dummy-app-password";
+    for (const code of ["SMTP_AUTH_FAILED", "EAUTH"]) {
+      smtpError = Object.assign(new Error("Raw SMTP failure; never show this"), { code });
+      await assert.rejects(sendUserMail(user._id, { to: "candidate@example.com" }), error => error.code === "USER_APP_PASSWORD_REJECTED" && error.message.includes("rejected") && !error.message.includes("Raw SMTP"));
+    }
+    smtpError = Object.assign(new Error("Network timeout"), { code: "SMTP_CONNECTION_FAILED" });
+    await assert.rejects(sendUserMail(user._id, { to: "candidate@example.com" }), { code: "SMTP_CONNECTION_FAILED" });
+    smtpError = null;
   });
 });
 

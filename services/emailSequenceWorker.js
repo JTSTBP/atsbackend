@@ -37,8 +37,9 @@ const sendCommunication = async (communication) => {
 
 const runEmailSequenceWorkerOnce = async () => {
   const now = new Date();
+  await Communication.updateMany({ channel: "WHATSAPP", sequenceId: { $type: "string" }, status: { $in: ["generated", "reviewed", "scheduled", "failed"] } }, { $set: { status: "stopped", stoppedAt: now, stopReason: "whatsapp_direct_messages_only" } });
   const due = await Communication.find({
-    channel: { $in: ["EMAIL", "WHATSAPP"] },
+    channel: "EMAIL",
     sequenceId: { $type: "string" },
     status: "scheduled",
     scheduledAt: { $lte: now },
@@ -60,6 +61,9 @@ const runEmailSequenceWorkerOnce = async () => {
       claimed.status = "failed";
       claimed.errorMessage = JSON.stringify(formatEmailErrorResponse(error));
       await claimed.save();
+      if (["USER_APP_PASSWORD_MISSING", "USER_APP_PASSWORD_REJECTED", "MICROSOFT_RECONNECT_REQUIRED", "SENDER_UNAVAILABLE"].includes(error.code)) {
+        await Communication.updateMany({ sequenceId: claimed.sequenceId, recruiterId: claimed.recruiterId, status: "scheduled" }, { $set: { status: "stopped", stoppedAt: new Date(), stopReason: error.code, errorMessage: claimed.errorMessage } });
+      }
       failed += 1;
     }
   }
